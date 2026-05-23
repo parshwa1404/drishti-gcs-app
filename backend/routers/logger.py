@@ -1,12 +1,16 @@
 import asyncio
 import json
 import random
+import time
 from fastapi import APIRouter
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter()
 
+# Deolali Cantonment reference point
+_DEOLALI_LAT = 19.9175
+_DEOLALI_LON = 73.8278
 
 class ConnectRequest(BaseModel):
     host: str
@@ -24,6 +28,9 @@ _state = {
     "connected": False,
     "running": False,
     "host": None,
+    # GPS random-walk state (always ticking so Live Map works without Start)
+    "lat": _DEOLALI_LAT,
+    "lon": _DEOLALI_LON,
 }
 
 
@@ -56,6 +63,10 @@ async def status():
         heading = 45.0
 
         while True:
+            # GPS random walk — always active so LiveMapPanel animates in dev
+            _state["lat"] += random.uniform(-0.00005, 0.00005)
+            _state["lon"] += random.uniform(-0.00005, 0.00005)
+
             if _state["running"]:
                 frame_count += random.randint(8, 12)
                 disk_mb = max(0, disk_mb - random.randint(10, 30))
@@ -72,6 +83,9 @@ async def status():
                 "heading_deg": round(heading, 1),
                 "disk_mb_remaining": disk_mb,
                 "fix_count": fix_count,
+                "lat": round(_state["lat"], 7),
+                "lon": round(_state["lon"], 7),
+                "timestamp_ms": int(time.time() * 1000),
             }
             yield {"data": json.dumps(payload)}
             await asyncio.sleep(1.0)
