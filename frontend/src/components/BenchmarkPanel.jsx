@@ -209,6 +209,47 @@ function HeadingScatter({ frames, gate }) {
   );
 }
 
+function ConfidenceChart({ frames }) {
+  const CONF_COLORS = ['#f59e0b', '#a3e635', '#34d399', '#14b8a6', '#0d9488'];
+  const bins = [
+    { name: '0–0.2',   min: 0,   max: 0.2  },
+    { name: '0.2–0.4', min: 0.2, max: 0.4  },
+    { name: '0.4–0.6', min: 0.4, max: 0.6  },
+    { name: '0.6–0.8', min: 0.6, max: 0.8  },
+    { name: '0.8–1.0', min: 0.8, max: 1.01 },
+  ];
+  const data = bins.map((b, i) => ({
+    name: b.name,
+    count: frames.filter((f) => {
+      const c = f.confidence ?? (f.inlier_count != null ? Math.min(1.0, f.inlier_count / 30) : null);
+      return c != null && c >= b.min && c < b.max;
+    }).length,
+    color: CONF_COLORS[i],
+  }));
+
+  return (
+    <div className="bg-gray-800 rounded-xl p-4">
+      <div className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
+        Frame Confidence Distribution
+      </div>
+      <ResponsiveContainer width="100%" height={180}>
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+          <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} />
+          <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} />
+          <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6 }} />
+          <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+            {data.map((entry, i) => (
+              <Cell key={i} fill={entry.color} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+      <div className="text-xs text-gray-600 text-center mt-1">amber (low) → teal (high)</div>
+    </div>
+  );
+}
+
 // ─── Main panel ──────────────────────────────────────────────────────────────
 
 export default function BenchmarkPanel() {
@@ -297,11 +338,12 @@ export default function BenchmarkPanel() {
             <StatsTable title={`Cut B — Inliers ≥ ${gate}`} stats={bm?.cut_b} color="bg-blue-500" />
           </div>
 
-          {/* Row 2 — charts */}
-          <div className="grid grid-cols-3 gap-4">
+          {/* Row 2 — charts (2×2 grid) */}
+          <div className="grid grid-cols-2 gap-4">
             <ErrorHistogram frames={frames} gate={gate} />
             <InlierDistribution frames={frames} gate={gate} />
             <HeadingScatter frames={frames} gate={gate} />
+            <ConfidenceChart frames={frames} />
           </div>
 
           {/* Session info footer */}

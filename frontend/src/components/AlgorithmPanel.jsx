@@ -194,11 +194,19 @@ export default function AlgorithmPanel() {
   const estTrack    = results?.est_track ?? [];
   const gpsLine     = gpsTrack.map((p) => [p.lat, p.lon]);
   const estLine     = estTrack.map((p) => [p.lat, p.lon]);
-  const currentGPS  = frame?.lat  != null ? { lat: frame.lat,  lon: frame.lon  } : null;
+  const currentGPS  = frame?.lat     != null ? { lat: frame.lat,     lon: frame.lon     } : null;
   const currentEst  = frame?.est_lat != null ? { lat: frame.est_lat, lon: frame.est_lon } : null;
   const isRejected  = !!frame?.reject_reason;
 
   const fp = framePair;
+
+  // Confidence: prefer field from API, fall back to inlier_count / 30
+  const confidence = fp?.confidence
+    ?? (frame?.inlier_count != null ? Math.min(1.0, frame.inlier_count / 30) : null);
+  const confidenceColor = confidence == null ? 'text-gray-400'
+    : confidence >= 0.67 ? 'text-green-400'
+    : confidence >= 0.33 ? 'text-amber-400'
+    : 'text-red-400';
 
   return (
     <div className="flex flex-col h-[calc(100vh-56px)] bg-gray-900 overflow-hidden">
@@ -330,13 +338,19 @@ export default function AlgorithmPanel() {
               <MetricRow label="Inliers"           value={fp?.inlier_count} />
               <MetricRow label="Position error"    value={fp?.position_error_m != null ? fp.position_error_m.toFixed(1) : null} unit=" m" />
               <MetricRow label="Camera GSD"        value={fp?.camera_gsd_m_per_px != null ? fp.camera_gsd_m_per_px.toFixed(3) : null} unit=" m/px" />
-              <div className="flex flex-col items-center py-2">
+              <div className="flex flex-col items-center py-2 border-b border-gray-700">
                 <span className="text-xs text-gray-500 mb-0.5">Pre-filter</span>
                 {fp?.reject_reason ? (
                   <span className="text-xs font-bold text-amber-400 uppercase">{fp.reject_reason}</span>
                 ) : (
                   <span className="text-xs font-bold text-green-400">PASS</span>
                 )}
+              </div>
+              <div className="flex flex-col items-center py-2">
+                <span className="text-xs text-gray-500 mb-0.5">Confidence</span>
+                <span className={`text-sm font-mono font-semibold tabular-nums ${confidenceColor}`}>
+                  {confidence != null ? confidence.toFixed(2) : '—'}
+                </span>
               </div>
             </div>
 

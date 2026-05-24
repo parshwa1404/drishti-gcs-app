@@ -55,6 +55,37 @@ async def stop():
     return {"status": "stopped"}
 
 
+@router.get("/preflight")
+async def preflight(fail_demo: bool = False):
+    if fail_demo:
+        return {
+            "gps_fix": {
+                "pass": False,
+                "hdop": 2.8,
+                "satellites": 5,
+                "message": "Poor fix, HDOP 2.8 (threshold: 2.0)",
+            },
+            "heading": {
+                "pass": False,
+                "heading_deg": 47.3,
+                "variance_deg": 18.0,
+                "message": "Unstable heading, variance 18.0° (threshold: 5°)",
+            },
+            "frame_counter": {"pass": True, "fps": 10.2, "message": "Camera streaming at 10.2 fps"},
+            "tile_db": {"pass": True, "tile_count": 480, "index_path": "~/datasets/faiss_index/deolali_z19", "message": "480 tiles loaded"},
+            "disk_space": {"pass": True, "free_gb": 12.4, "message": "12.4 GB free"},
+            "gsd_norm": {"pass": True, "enabled": True, "message": "GSD normalisation enabled (target 0.28 m/px)"},
+        }
+    return {
+        "gps_fix": {"pass": True, "hdop": 0.8, "satellites": 14, "message": "Fix acquired, HDOP 0.8"},
+        "heading": {"pass": True, "heading_deg": 47.3, "variance_deg": 2.1, "message": "Stable at 47.3°"},
+        "frame_counter": {"pass": True, "fps": 10.2, "message": "Camera streaming at 10.2 fps"},
+        "tile_db": {"pass": True, "tile_count": 480, "index_path": "~/datasets/faiss_index/deolali_z19", "message": "480 tiles loaded"},
+        "disk_space": {"pass": True, "free_gb": 12.4, "message": "12.4 GB free"},
+        "gsd_norm": {"pass": True, "enabled": True, "message": "GSD normalisation enabled (target 0.28 m/px)"},
+    }
+
+
 @router.get("/status")
 async def status():
     async def event_generator():

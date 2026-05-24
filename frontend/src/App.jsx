@@ -4,6 +4,7 @@ import LiveMapPanel from './components/LiveMapPanel';
 import ReplayPanel from './components/ReplayPanel';
 import AlgorithmPanel from './components/AlgorithmPanel';
 import BenchmarkPanel from './components/BenchmarkPanel';
+import ChecklistPanel from './components/ChecklistPanel';
 
 const PANELS = [
   { id: 'logging',   label: 'Logging' },
@@ -11,6 +12,7 @@ const PANELS = [
   { id: 'replay',    label: 'Replay' },
   { id: 'algorithm', label: 'Algorithm' },
   { id: 'benchmark', label: 'Benchmark' },
+  { id: 'checklist', label: 'Pre-flight' },
 ];
 
 const PANEL_COMPONENTS = {
@@ -19,6 +21,7 @@ const PANEL_COMPONENTS = {
   'replay':    <ReplayPanel />,
   'algorithm': <AlgorithmPanel />,
   'benchmark': <BenchmarkPanel />,
+  'checklist': <ChecklistPanel />,
 };
 
 export default function App() {
