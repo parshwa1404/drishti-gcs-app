@@ -61,6 +61,72 @@ function Toast({ message, onDismiss }) {
   );
 }
 
+// ─── Quick Verify card ───────────────────────────────────────────────────────
+
+function QuickVerifyCard({ verify, onDismiss }) {
+  const isGood = verify.verdict === 'GOOD';
+  return (
+    <div className={`shrink-0 border-b ${isGood ? 'border-green-800 bg-green-950/40' : 'border-red-800 bg-red-950/40'} px-4 py-3`}>
+      <div className="flex items-start gap-4">
+        {/* Verdict badge */}
+        <div className={`shrink-0 px-4 py-2 rounded-lg font-bold text-lg tracking-widest
+                         ${isGood ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>
+          {isGood ? 'GOOD' : 'RE-FLY'}
+        </div>
+
+        {/* Stats */}
+        <div className="flex-1 grid grid-cols-2 gap-x-8 gap-y-0.5 text-xs">
+          <div className="flex gap-2 text-gray-400">
+            <span>Frames:</span>
+            <span className="text-gray-200 font-mono">{verify.frame_count}</span>
+          </div>
+          <div className="flex gap-2 text-gray-400">
+            <span>Duration:</span>
+            <span className="text-gray-200 font-mono">{verify.duration_s} s</span>
+          </div>
+          <div className="flex gap-2 text-gray-400">
+            <span>GPS pts:</span>
+            <span className="text-gray-200 font-mono">{verify.gps_track_points}</span>
+          </div>
+          <div className="flex gap-2 text-gray-400">
+            <span>HDOP (median):</span>
+            <span className={`font-mono font-semibold ${verify.gps_fix_quality.hdop_median <= 1.5 ? 'text-green-400' : 'text-amber-400'}`}>
+              {verify.gps_fix_quality.hdop_median ?? '—'}
+            </span>
+          </div>
+          <div className="flex gap-2 text-gray-400">
+            <span>Gaps &gt; 1 s:</span>
+            <span className={`font-mono font-semibold ${verify.recording_gaps.length === 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {verify.recording_gaps.length}
+            </span>
+          </div>
+          <div className="flex gap-2 text-gray-400">
+            <span>Danger zone frames:</span>
+            <span className={`font-mono font-semibold ${verify.heading_coverage.danger_zone_frames === 0 ? 'text-green-400' : 'text-amber-400'}`}>
+              {verify.heading_coverage.danger_zone_frames}
+            </span>
+          </div>
+        </div>
+
+        {/* Dismiss */}
+        <button
+          onClick={onDismiss}
+          className="shrink-0 text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded"
+        >
+          Dismiss
+        </button>
+      </div>
+
+      {/* RE-FLY reasons */}
+      {!isGood && verify.refly_reasons.length > 0 && (
+        <ul className="mt-2 ml-[120px] space-y-0.5 text-xs text-red-300 list-disc list-inside">
+          {verify.refly_reasons.map((r, i) => <li key={i}>{r}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ─── Main panel ──────────────────────────────────────────────────────────────
 export default function ReplayPanel() {
   const [sessionDir, setSessionDir]     = useState('');
@@ -70,8 +136,19 @@ export default function ReplayPanel() {
   const [playing, setPlaying]           = useState(false);
   const [toast, setToast]               = useState('');
   const [imgError, setImgError]         = useState(false);
+  const [verify, setVerify]             = useState(null);
+  const [verifyDismissed, setVerifyDismissed] = useState(false);
   const playRef = useRef(null);
   const imgRef  = useRef(null);
+
+  function fetchVerify(sessionName) {
+    setVerify(null);
+    setVerifyDismissed(false);
+    fetch(`${API}/session/verify/${encodeURIComponent(sessionName)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v) => { if (v) setVerify(v); })
+      .catch(() => {});
+  }
 
   // Auto-load mock on mount
   useEffect(() => {
@@ -82,6 +159,7 @@ export default function ReplayPanel() {
           setSessionData(data);
           setSessionDir('[mock session]');
           setCurrentIdx(0);
+          fetchVerify(data.session_name);
         }
       })
       .catch(() => {});
@@ -150,6 +228,7 @@ export default function ReplayPanel() {
       }
       setSessionData(data);
       setCurrentIdx(0);
+      fetchVerify(data.session_name);
     } catch {
       setToast('Cannot reach backend');
     } finally {
@@ -167,6 +246,7 @@ export default function ReplayPanel() {
       setSessionData(data);
       setSessionDir('[mock session]');
       setCurrentIdx(0);
+      fetchVerify(data.session_name);
     } catch {
       setToast('Cannot reach backend');
     } finally {
@@ -214,6 +294,11 @@ export default function ReplayPanel() {
           </span>
         )}
       </div>
+
+      {/* ── Quick Verify ── */}
+      {verify && !verifyDismissed && (
+        <QuickVerifyCard verify={verify} onDismiss={() => setVerifyDismissed(true)} />
+      )}
 
       {/* ── Timeline ── */}
       {sessionData && (
