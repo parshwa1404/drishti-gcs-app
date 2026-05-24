@@ -352,6 +352,30 @@ export default function AlgorithmPanel() {
                   {confidence != null ? confidence.toFixed(2) : '—'}
                 </span>
               </div>
+
+              {/* Solver timing */}
+              <div className="border-t border-gray-700 mt-1 pt-1">
+                <div className="text-xs text-gray-500 text-center mb-0.5 uppercase tracking-wider">Solver</div>
+                <MetricRow label="Embed"     value={fp?.solver_ms?.embed     != null ? fp.solver_ms.embed.toFixed(1)     : null} unit=" ms" />
+                <MetricRow label="FAISS"     value={fp?.solver_ms?.faiss     != null ? fp.solver_ms.faiss.toFixed(1)     : null} unit=" ms" />
+                <MetricRow label="LightGlue" value={fp?.solver_ms?.lightglue != null ? fp.solver_ms.lightglue.toFixed(1) : null} unit=" ms" />
+                <MetricRow label="Total"     value={fp?.solver_ms?.total     != null ? fp.solver_ms.total.toFixed(1)     : null} unit=" ms" />
+              </div>
+              <div className="flex flex-col items-center py-2 border-t border-gray-700">
+                <span className="text-xs text-gray-500 mb-0.5">Last fix</span>
+                {(() => {
+                  const lf = fp?.seconds_since_last_fix;
+                  const col = lf == null ? 'text-gray-400'
+                    : lf < 2 ? 'text-green-400'
+                    : lf < 5 ? 'text-amber-400'
+                    : 'text-red-400';
+                  return (
+                    <span className={`text-sm font-mono font-semibold tabular-nums ${col}`}>
+                      {lf != null ? `${lf.toFixed(1)} s ago` : '—'}
+                    </span>
+                  );
+                })()}
+              </div>
             </div>
 
             {/* Matched tile */}

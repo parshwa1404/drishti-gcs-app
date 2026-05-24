@@ -90,10 +90,27 @@ def compute_benchmark(frames: list[dict], gate: int = 10) -> dict:
     }
 
 
+def compute_sslf(frames: list[dict], gate: int = 10) -> None:
+    """Annotate frames in-place with seconds_since_last_fix."""
+    last_fix_ts: int | None = None
+    for f in frames:
+        ts_ms = f["timestamp_ms"]
+        if f.get("reject_reason") is not None:
+            f["seconds_since_last_fix"] = None
+        elif (f.get("inlier_count") or 0) >= gate:
+            f["seconds_since_last_fix"] = 0.0
+            last_fix_ts = ts_ms
+        elif last_fix_ts is not None:
+            f["seconds_since_last_fix"] = round((ts_ms - last_fix_ts) / 1000.0, 1)
+        else:
+            f["seconds_since_last_fix"] = None
+
+
 # ─── Mock data generators ─────────────────────────────────────────────────────
 
 def generate_mock_results(session_name: str = "mock_session") -> dict:
     n = 100
+    gate = 10
     frames: list[dict] = []
     lat, lon = _DEOLALI_LAT, _DEOLALI_LON
     heading = 45.0
@@ -110,6 +127,18 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
             weights=[70, 20, 7, 3], k=1
         )[0]
 
+        # Solver timing: total ~ lognormal median 120ms p90 ~280ms
+        total_ms = math.exp(random.gauss(math.log(120), 0.5))
+        embed_ms = random.uniform(12.0, 20.0)
+        faiss_ms = random.uniform(3.0, 8.0)
+        lightglue_ms = max(1.0, total_ms - embed_ms - faiss_ms)
+        solver_ms = {
+            "embed":      round(embed_ms, 1),
+            "faiss":      round(faiss_ms, 1),
+            "lightglue":  round(lightglue_ms, 1),
+            "total":      round(total_ms, 1),
+        }
+
         if rr is not None:
             inliers = random.randint(2, 8)
             frames.append({
@@ -123,6 +152,8 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
                 "camera_gsd_m_per_px": round(random.uniform(0.08, 0.12), 3),
                 "compass_hdg_deg": round(heading, 1),
                 "reject_reason": rr,
+                "solver_ms": solver_ms,
+                "seconds_since_last_fix": None,   # filled by compute_sslf below
             })
         else:
             err = math.exp(random.gauss(math.log(22), 0.65))
@@ -142,7 +173,12 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
                 "camera_gsd_m_per_px": round(random.uniform(0.08, 0.12), 3),
                 "compass_hdg_deg": round(heading, 1),
                 "reject_reason": None,
+                "solver_ms": solver_ms,
+                "seconds_since_last_fix": None,   # filled below
             })
+
+    # Annotate seconds_since_last_fix in-place
+    compute_sslf(frames, gate=gate)
 
     gps_track = [{"lat": f["lat"], "lon": f["lon"]} for f in frames]
     est_track = [
@@ -240,13 +276,16 @@ async def get_frame_pair(session_name: str, timestamp_ms: int):
     if frame is None:
         raise HTTPException(status_code=404, detail="Frame not found")
     return {
-        "live_frame":    _rand_jpeg_b64(1280, 800),
-        "matched_tile":  _rand_jpeg_b64(512, 512),
-        "retrieval_rank":      frame.get("retrieval_rank"),
-        "inlier_count":        frame.get("inlier_count"),
-        "position_error_m":    frame.get("position_error_m"),
-        "camera_gsd_m_per_px": frame.get("camera_gsd_m_per_px"),
-        "reject_reason":       frame.get("reject_reason"),
+        "live_frame":              _rand_jpeg_b64(1280, 800),
+        "matched_tile":            _rand_jpeg_b64(512, 512),
+        "retrieval_rank":          frame.get("retrieval_rank"),
+        "inlier_count":            frame.get("inlier_count"),
+        "position_error_m":        frame.get("position_error_m"),
+        "camera_gsd_m_per_px":     frame.get("camera_gsd_m_per_px"),
+        "reject_reason":           frame.get("reject_reason"),
+        "confidence":              frame.get("confidence"),
+        "solver_ms":               frame.get("solver_ms"),
+        "seconds_since_last_fix":  frame.get("seconds_since_last_fix"),
     }
 
 

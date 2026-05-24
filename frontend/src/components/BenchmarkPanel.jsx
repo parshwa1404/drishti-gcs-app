@@ -250,6 +250,101 @@ function ConfidenceChart({ frames }) {
   );
 }
 
+function SolverTimeHistogram({ frames }) {
+  const bins = [
+    { name: '0–50',   min: 0,   max: 50,       color: '#3b82f6' },
+    { name: '50–100', min: 50,  max: 100,      color: '#3b82f6' },
+    { name: '100–200',min: 100, max: 200,      color: '#3b82f6' },
+    { name: '200–500',min: 200, max: 500,      color: '#3b82f6' },
+    { name: '500+',   min: 500, max: Infinity, color: '#3b82f6' },
+  ];
+  const hasSolver = frames.some((f) => f.solver_ms != null);
+  const data = bins.map((b) => ({
+    name: b.name,
+    count: frames.filter((f) => {
+      const t = f.solver_ms?.total;
+      return t != null && t >= b.min && t < b.max;
+    }).length,
+  }));
+
+  return (
+    <div className="bg-gray-800 rounded-xl p-4">
+      <div className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
+        Solver Time Distribution
+        <span className="ml-2 font-normal text-gray-600">(ms)</span>
+      </div>
+      {!hasSolver ? (
+        <div className="h-[180px] flex items-center justify-center text-xs text-gray-600">
+          No solver_ms data in results
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+            <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} />
+            <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} />
+            <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6 }} />
+            <Bar dataKey="count" fill="#3b82f6" radius={[2, 2, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
+function FixGapHistogram({ frames }) {
+  const bins = [
+    { name: '0–1 s',  min: 0,  max: 1,        color: '#4ade80' },
+    { name: '1–2 s',  min: 1,  max: 2,        color: '#4ade80' },
+    { name: '2–5 s',  min: 2,  max: 5,        color: '#f59e0b' },
+    { name: '5–10 s', min: 5,  max: 10,       color: '#ef4444' },
+    { name: '10+ s',  min: 10, max: Infinity,  color: '#ef4444' },
+  ];
+  const hasGaps = frames.some((f) => f.seconds_since_last_fix != null && f.seconds_since_last_fix > 0);
+  const data = bins.map((b) => ({
+    name: b.name,
+    count: frames.filter((f) => {
+      const g = f.seconds_since_last_fix;
+      return g != null && g > 0 && g >= b.min && g < b.max;
+    }).length,
+    color: b.color,
+  }));
+
+  return (
+    <div className="bg-gray-800 rounded-xl p-4">
+      <div className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
+        Fix Gap Distribution
+      </div>
+      {!hasGaps ? (
+        <div className="h-[180px] flex items-center justify-center text-xs text-gray-600">
+          No gap data — all frames are fixes
+        </div>
+      ) : (
+        <>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={data}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+              <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} />
+              <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} />
+              <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6 }} />
+              <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                {data.map((entry, i) => (
+                  <Cell key={i} fill={entry.color} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="flex gap-4 mt-2 justify-center text-xs text-gray-500">
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-green-400 inline-block" />&lt; 2 s</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" />2–5 s</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" />&gt; 5 s</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Main panel ──────────────────────────────────────────────────────────────
 
 export default function BenchmarkPanel() {
@@ -338,12 +433,14 @@ export default function BenchmarkPanel() {
             <StatsTable title={`Cut B — Inliers ≥ ${gate}`} stats={bm?.cut_b} color="bg-blue-500" />
           </div>
 
-          {/* Row 2 — charts (2×2 grid) */}
+          {/* Row 2 — charts (3×2 grid) */}
           <div className="grid grid-cols-2 gap-4">
             <ErrorHistogram frames={frames} gate={gate} />
             <InlierDistribution frames={frames} gate={gate} />
             <HeadingScatter frames={frames} gate={gate} />
             <ConfidenceChart frames={frames} />
+            <SolverTimeHistogram frames={frames} />
+            <FixGapHistogram frames={frames} />
           </div>
 
           {/* Session info footer */}

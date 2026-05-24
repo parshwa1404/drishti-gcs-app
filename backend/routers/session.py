@@ -194,6 +194,82 @@ async def get_frame(timestamp_ms: int):
     return Response(content=p.read_bytes(), media_type="image/jpeg")
 
 
+@router.get("/verify/{session_name}")
+async def verify(session_name: str):
+    if _session is None or _session.get("session_name") != session_name:
+        raise HTTPException(status_code=404, detail="Session not loaded or name mismatch")
+
+    frames = _session.get("frames", [])
+    timestamps = [f["timestamp_ms"] for f in frames]
+    frame_count = len(frames)
+    duration_s = _session.get("duration_s", 0.0)
+
+    gps_track_points = sum(1 for f in frames if f["lat"] is not None)
+
+    # Recording gaps: consecutive frame pairs with gap > 1 s
+    recording_gaps = []
+    for i in range(1, len(timestamps)):
+        gap_ms = timestamps[i] - timestamps[i - 1]
+        if gap_ms > 1000:
+            recording_gaps.append({"start_ms": timestamps[i - 1], "gap_s": round(gap_ms / 1000.0, 1)})
+
+    # GPS fix quality
+    hdops = sorted(f["hdop"] for f in frames if f["hdop"] is not None)
+    no_fix_frames = sum(1 for f in frames if f["lat"] is None)
+    hdop_median = _pct_list(hdops, 50) if hdops else None
+    hdop_max    = round(max(hdops), 2) if hdops else None
+
+    # Heading coverage (12 × 30° buckets)
+    headings = [f["heading_deg"] for f in frames if f["heading_deg"] is not None]
+    covered_buckets: set[int] = set()
+    danger_zone_frames = 0
+    for h in headings:
+        covered_buckets.add(int(h // 30) % 12)
+        if 210 <= h < 240:
+            danger_zone_frames += 1
+
+    # Verdict
+    max_gap_s = max((g["gap_s"] for g in recording_gaps), default=0.0)
+    verdict = "GOOD"
+    refly_reasons: list[str] = []
+    if max_gap_s > 5:
+        verdict = "REFLY"
+        refly_reasons.append(f"{len(recording_gaps)} recording gap(s) detected (max {max_gap_s} s)")
+    if no_fix_frames > 10:
+        verdict = "REFLY"
+        refly_reasons.append(f"{no_fix_frames} frames without GPS fix")
+    if frame_count < 100:
+        verdict = "REFLY"
+        refly_reasons.append(f"Only {frame_count} frames recorded (minimum 100 required)")
+
+    return {
+        "frame_count":       frame_count,
+        "duration_s":        duration_s,
+        "gps_track_points":  gps_track_points,
+        "recording_gaps":    recording_gaps,
+        "gps_fix_quality": {
+            "hdop_median":    hdop_median,
+            "hdop_max":       hdop_max,
+            "no_fix_frames":  no_fix_frames,
+        },
+        "heading_coverage": {
+            "buckets_covered":    len(covered_buckets),
+            "danger_zone_frames": danger_zone_frames,
+        },
+        "verdict":        verdict,
+        "refly_reasons":  refly_reasons,
+    }
+
+
+def _pct_list(s: list[float], p: float) -> float:
+    n = len(s)
+    if n == 0:
+        return 0.0
+    idx = p / 100.0 * (n - 1)
+    lo, hi = int(idx), min(int(idx) + 1, n - 1)
+    return round(s[lo] + (s[hi] - s[lo]) * (idx - lo), 2)
+
+
 @router.get("/live")
 async def live():
     """SSE stream of GPS fixes aliasing the logger mock random walk."""
