@@ -111,13 +111,15 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
         )[0]
 
         if rr is not None:
+            inliers = random.randint(2, 8)
             frames.append({
                 "timestamp_ms": ts_ms,
                 "lat": round(lat, 7), "lon": round(lon, 7),
                 "est_lat": None, "est_lon": None,
                 "position_error_m": None,
                 "retrieval_rank": None,
-                "inlier_count": random.randint(2, 8),
+                "inlier_count": inliers,
+                "confidence": round(min(1.0, inliers / 30), 3),
                 "camera_gsd_m_per_px": round(random.uniform(0.08, 0.12), 3),
                 "compass_hdg_deg": round(heading, 1),
                 "reject_reason": rr,
@@ -127,6 +129,7 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
             angle = random.uniform(0, 2 * math.pi)
             dlat = err / 111320.0
             dlon = err / (111320.0 * math.cos(math.radians(lat)))
+            inliers = random.randint(5, 42)
             frames.append({
                 "timestamp_ms": ts_ms,
                 "lat": round(lat, 7), "lon": round(lon, 7),
@@ -134,7 +137,8 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
                 "est_lon": round(lon + dlon * math.sin(angle), 7),
                 "position_error_m": round(err, 1),
                 "retrieval_rank": random.choices([1, 2, 3, 4, 5], weights=[60, 20, 10, 6, 4], k=1)[0],
-                "inlier_count": random.randint(5, 42),
+                "inlier_count": inliers,
+                "confidence": round(min(1.0, inliers / 30), 3),
                 "camera_gsd_m_per_px": round(random.uniform(0.08, 0.12), 3),
                 "compass_hdg_deg": round(heading, 1),
                 "reject_reason": None,
