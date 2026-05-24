@@ -8,6 +8,8 @@ from routers import session, pipeline, logger
 async def lifespan(app: FastAPI):
     mock_dir = session.generate_mock_session()
     session.load_session_state(mock_dir)
+    from pathlib import Path
+    pipeline.generate_mock_results(Path(mock_dir).name)
     yield
 
 
