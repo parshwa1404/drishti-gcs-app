@@ -1,0 +1,25 @@
+# Raspberry Pi connection used by Panel 1 (Logging Control) to tail the live
+# drishti-rpi-logger session over SSH.
+#
+# Values here are defaults. They are overridden, in order of precedence:
+#   1. the host/user/key entered in the Panel 1 UI (per-session)
+#   2. environment variables (see below)
+#   3. these yaml values
+#
+# Environment variable overrides (handy for field laptops without editing yaml):
+#   DRISHTI_RPI_HOST         -> hostname
+#   DRISHTI_RPI_USER         -> username
+#   DRISHTI_RPI_KEY_PATH     -> key_path
+#   DRISHTI_RPI_SESSION_DIR  -> session_dir
+
+hostname: 192.168.1.100
+username: pi
+key_path: ~/.ssh/drishti_rpi
+
+# Base directory on the RPi that holds session folders. The active session is
+# session_dir/<session_name>/timestamps.csv.
+session_dir: ~/drishti_sessions
+
+# Reconnect backoff ceiling (seconds). Backoff doubles 1 -> 2 -> 4 ... up to
+# this cap while the SSH link is down.
+reconnect_max_backoff_s: 30

@@ -114,6 +114,7 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
     frames: list[dict] = []
     lat, lon = _DEOLALI_LAT, _DEOLALI_LON
     heading = 45.0
+    altitude = 80.0
     start_ms = int(time.time() * 1000) - n * 300
 
     for i in range(n):
@@ -121,6 +122,7 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
         lat += random.uniform(-0.00008, 0.00008)
         lon += random.uniform(-0.00008, 0.00008)
         heading = (heading + random.uniform(-5, 5)) % 360
+        altitude = round(max(60.0, min(100.0, altitude + random.uniform(-1.5, 1.5))), 1)
 
         rr = random.choices(
             [None, "blur", "uniform", "exposure"],
@@ -151,6 +153,7 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
                 "confidence": round(min(1.0, inliers / 30), 3),
                 "camera_gsd_m_per_px": round(random.uniform(0.08, 0.12), 3),
                 "compass_hdg_deg": round(heading, 1),
+                "altitude_m": altitude,
                 "reject_reason": rr,
                 "solver_ms": solver_ms,
                 "seconds_since_last_fix": None,   # filled by compute_sslf below
@@ -172,6 +175,7 @@ def generate_mock_results(session_name: str = "mock_session") -> dict:
                 "confidence": round(min(1.0, inliers / 30), 3),
                 "camera_gsd_m_per_px": round(random.uniform(0.08, 0.12), 3),
                 "compass_hdg_deg": round(heading, 1),
+                "altitude_m": altitude,
                 "reject_reason": None,
                 "solver_ms": solver_ms,
                 "seconds_since_last_fix": None,   # filled below
@@ -282,6 +286,7 @@ async def get_frame_pair(session_name: str, timestamp_ms: int):
         "inlier_count":            frame.get("inlier_count"),
         "position_error_m":        frame.get("position_error_m"),
         "camera_gsd_m_per_px":     frame.get("camera_gsd_m_per_px"),
+        "altitude_m":              frame.get("altitude_m"),
         "reject_reason":           frame.get("reject_reason"),
         "confidence":              frame.get("confidence"),
         "solver_ms":               frame.get("solver_ms"),

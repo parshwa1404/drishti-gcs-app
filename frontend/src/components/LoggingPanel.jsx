@@ -3,21 +3,50 @@ import { useState, useEffect, useRef } from 'react';
 const API = 'http://localhost:8000';
 
 function hdopColor(hdop) {
+  if (hdop == null) return 'text-gray-500';
   if (hdop <= 1.0) return 'text-green-400';
   if (hdop <= 2.0) return 'text-yellow-400';
   return 'text-red-400';
 }
 
 function hdopBarColor(hdop) {
+  if (hdop == null) return 'bg-gray-600';
   if (hdop <= 1.0) return 'bg-green-400';
   if (hdop <= 2.0) return 'bg-yellow-400';
   return 'bg-red-500';
 }
 
 function hdopLabel(hdop) {
+  if (hdop == null) return 'n/a';
   if (hdop <= 1.0) return 'Excellent';
   if (hdop <= 2.0) return 'Good';
   return 'Poor';
+}
+
+function fmtClock(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+const CONN_STYLES = {
+  'connected':          ['border-green-700 text-green-400', 'bg-green-400', false],
+  'reconnecting':       ['border-amber-700 text-amber-400', 'bg-amber-400', true],
+  'waiting for logger': ['border-gray-600 text-gray-400',   'bg-gray-500',  true],
+  'error':              ['border-red-700 text-red-400',     'bg-red-500',   false],
+};
+
+function ConnBadge({ status }) {
+  if (!status) return null;
+  const [cls, dot, pulse] = CONN_STYLES[status] || ['border-gray-600 text-gray-400', 'bg-gray-500', false];
+  return (
+    <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
+                      bg-gray-900/70 border ${cls}`}>
+      <span className={`w-2 h-2 rounded-full ${dot} ${pulse ? 'animate-pulse' : ''}`} />
+      {status}
+    </span>
+  );
 }
 
 function CompassRose({ heading }) {
@@ -91,7 +120,8 @@ export default function LoggingPanel() {
       if (res.ok) {
         setConnected(true);
       } else {
-        setConnError('Connection failed.');
+        const err = await res.json().catch(() => ({}));
+        setConnError(err.detail || 'Connection failed.');
       }
     } catch {
       setConnError('Cannot reach backend.');
@@ -101,12 +131,18 @@ export default function LoggingPanel() {
   }
 
   async function handleStart() {
+    setConnError('');
     const res = await fetch(`${API}/logger/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ altitude_m: Number(altitude), session_name: sessionName }),
     });
-    if (res.ok) setRunning(true);
+    if (res.ok) {
+      setRunning(true);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      setConnError(err.detail || 'Failed to start recording.');
+    }
   }
 
   async function handleStop() {
@@ -114,12 +150,15 @@ export default function LoggingPanel() {
     if (res.ok) setRunning(false);
   }
 
-  const diskPct = status
+  const diskPct = status && status.disk_mb_remaining != null
     ? Math.max(0, Math.min(100, Math.round((status.disk_mb_remaining / DISK_TOTAL_MB) * 100)))
-    : 100;
+    : null;
 
   const diskBarColor =
-    diskPct > 30 ? 'bg-blue-500' : diskPct > 10 ? 'bg-yellow-500' : 'bg-red-500';
+    diskPct == null ? 'bg-gray-600'
+      : diskPct > 30 ? 'bg-blue-500'
+      : diskPct > 10 ? 'bg-yellow-500'
+      : 'bg-red-500';
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
@@ -229,6 +268,7 @@ export default function LoggingPanel() {
               <span className="text-xs text-red-400 font-semibold">REC</span>
             </span>
           )}
+          <ConnBadge status={status?.connection_status} />
           {!status && (
             <span className="text-xs text-gray-600">waiting for backend…</span>
           )}
@@ -240,7 +280,7 @@ export default function LoggingPanel() {
             <div className="bg-gray-700 rounded-lg p-4">
               <div className="text-xs text-gray-400 mb-1">Frames</div>
               <div className="text-2xl font-mono font-bold text-white tabular-nums">
-                {status.frames_captured.toLocaleString()}
+                {(status.frames_captured ?? 0).toLocaleString()}
               </div>
             </div>
 
@@ -248,21 +288,23 @@ export default function LoggingPanel() {
             <div className="bg-gray-700 rounded-lg p-4">
               <div className="text-xs text-gray-400 mb-1">GPS HDOP</div>
               <div className={`text-2xl font-mono font-bold tabular-nums ${hdopColor(status.gps_quality)}`}>
-                {status.gps_quality.toFixed(2)}
+                {status.gps_quality != null ? status.gps_quality.toFixed(2) : '—'}
               </div>
               <div className={`mt-2 w-full h-1.5 rounded-full ${hdopBarColor(status.gps_quality)}`} />
               <div className="flex justify-between mt-1">
                 <span className="text-xs text-gray-500">{hdopLabel(status.gps_quality)}</span>
-                <span className="text-xs text-gray-500">{status.fix_count} sats</span>
+                <span className="text-xs text-gray-500">
+                  {status.fix_count != null ? `${status.fix_count} sats` : '—'}
+                </span>
               </div>
             </div>
 
             {/* Heading */}
             <div className="bg-gray-700 rounded-lg p-4 flex flex-col items-center gap-1">
               <div className="text-xs text-gray-400 self-start mb-1">Heading</div>
-              <CompassRose heading={status.heading_deg} />
+              <CompassRose heading={status.heading_deg ?? 0} />
               <div className="text-sm font-mono text-white tabular-nums">
-                {status.heading_deg.toFixed(1)}°
+                {status.heading_deg != null ? `${status.heading_deg.toFixed(1)}°` : '—'}
               </div>
             </div>
 
@@ -270,17 +312,37 @@ export default function LoggingPanel() {
             <div className="bg-gray-700 rounded-lg p-4">
               <div className="text-xs text-gray-400 mb-1">Disk Free</div>
               <div className="text-2xl font-mono font-bold text-white tabular-nums">
-                {(status.disk_mb_remaining / 1024).toFixed(1)}
-                <span className="text-base font-normal text-gray-400"> GB</span>
+                {status.disk_mb_remaining != null
+                  ? <>{(status.disk_mb_remaining / 1024).toFixed(1)}<span className="text-base font-normal text-gray-400"> GB</span></>
+                  : '—'}
               </div>
               <div className="mt-2 w-full bg-gray-600 rounded-full h-2">
                 <div
                   className={`h-2 rounded-full transition-all duration-500 ${diskBarColor}`}
-                  style={{ width: `${diskPct}%` }}
+                  style={{ width: `${diskPct ?? 0}%` }}
                 />
               </div>
-              <div className="text-xs text-gray-500 mt-1">{diskPct}% free</div>
+              <div className="text-xs text-gray-500 mt-1">
+                {diskPct != null ? `${diskPct}% free` : 'n/a'}
+              </div>
             </div>
+          </div>
+        )}
+
+        {/* Per-frame fields from the RPi logger (timestamps.csv) */}
+        {status && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              ['Altitude', status.altitude_m != null ? `${status.altitude_m.toFixed(1)} m` : '—'],
+              ['Latitude', status.lat != null ? status.lat.toFixed(6) : '—'],
+              ['Longitude', status.lon != null ? status.lon.toFixed(6) : '—'],
+              ['Last frame', fmtClock(status.unix_ms ?? status.timestamp_ms)],
+            ].map(([label, value]) => (
+              <div key={label} className="bg-gray-700/60 rounded-lg px-3 py-2">
+                <div className="text-xs text-gray-400 mb-0.5">{label}</div>
+                <div className="text-sm font-mono font-semibold text-gray-100 tabular-nums">{value}</div>
+              </div>
+            ))}
           </div>
         )}
       </section>

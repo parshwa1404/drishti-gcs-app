@@ -3,12 +3,14 @@ Load a session directory into memory.
 
 Expected layout:
   session_dir/
-    frames/     *.jpg files named {unix_ms}.jpg
-    gps.nmea    raw NMEA sentences
+    frames/          *.jpg files named {unix_ms}.jpg
+    gps.nmea         raw NMEA sentences
+    timestamps.csv   optional per-frame log (drishti-rpi-logger); adds altitude
 """
 
 from pathlib import Path
 from services.nmea_parser import parse_nmea_file
+from services.timestamps_csv import read_timestamps_csv
 
 
 def load_session(session_dir: str) -> dict:
@@ -61,6 +63,15 @@ def load_session(session_dir: str) -> dict:
                 "heading_deg": None,
                 "frame_path": f"frames/{ts_ms}.jpg",
             })
+
+    # Per-frame altitude from timestamps.csv when the logger wrote one.
+    ts_path = root / "timestamps.csv"
+    if ts_path.exists():
+        alt_by_ts = {r["unix_ms"]: r["altitude_m"] for r in read_timestamps_csv(str(ts_path))}
+        for f in frames:
+            alt = alt_by_ts.get(f["timestamp_ms"])
+            if alt is not None:
+                f["altitude_m"] = alt
 
     duration_s = 0.0
     if len(frame_timestamps) > 1:

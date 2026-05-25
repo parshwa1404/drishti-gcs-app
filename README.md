@@ -9,7 +9,7 @@ A standalone field GCS web app for the DRISHTI-NAV UAV visual navigation system.
 ## Panels
 
 **Panel 1 — Logging Control**
-Connect to the RPi over SSH (host / user / key path), then start and stop a named recording session. A live SSE status bar updates at 1 Hz showing frame count, GPS HDOP with colour-coded indicator (green ≤ 1.0, amber ≤ 2.0, red > 2.0), a rotating compass rose, disk space progress bar, satellite fix count, and current lat/lon. Start and Stop buttons are disabled until the SSH connection is established.
+Connect to the RPi over a real SSH connection (host / user / key path), then start and stop a named recording session. On Start the backend opens a persistent SSH channel and tails the active session's `timestamps.csv` with `tail -F`, parsing each per-frame record (`unix_ms, frame_path, lat, lon, altitude_m, heading_deg`) and pushing it to the 1 Hz SSE status stream. The status section shows frame count, a rotating compass rose, and a per-frame strip with **altitude (m)**, latitude, longitude, and last-frame time, plus a **connection-status badge** (`connected` / `reconnecting` / `waiting for logger` / `error`). The SSH link reconnects with exponential backoff (1→2→4 … capped) on drop, and reports `waiting for logger` until the CSV appears. HDOP / disk / satellite tiles are sourced from the mock status walk and show `—` on the real path (those fields are not in `timestamps.csv`).
 
 **Panel 2 — Live Map**
 Streams GPS fixes from the RPi via SSE and plots a rolling track (500-point ring buffer) on an Esri World Imagery satellite tile layer (zoom 19). Each fix is drawn as a colour-coded CircleMarker matching the current HDOP. The map auto-pans to the latest position; the first fix triggers a `flyTo` at zoom 16. A connection-status pill and a live overlay card (HDOP, fix count, heading) sit over the map.
@@ -55,11 +55,44 @@ npm run dev
 
 App runs at **http://localhost:5173**.
 
+### RPi connection (Panel 1)
+
+Panel 1 tails the live RPi logger over SSH. Connection defaults live in `backend/config/rpi.yaml`:
+
+```yaml
+hostname: 192.168.1.100
+username: pi
+key_path: ~/.ssh/drishti_rpi
+session_dir: ~/drishti_sessions      # base dir; active session is session_dir/<session_name>
+reconnect_max_backoff_s: 30
+```
+
+Precedence is: **values entered in the Panel 1 UI** → **environment variables** → **`rpi.yaml`**. The env overrides let a field laptop point at a fresh RPi without editing files:
+
+```bash
+export DRISHTI_RPI_HOST=192.168.4.20
+export DRISHTI_RPI_USER=pi
+export DRISHTI_RPI_KEY_PATH=~/.ssh/drishti_rpi
+export DRISHTI_RPI_SESSION_DIR=~/drishti_sessions
+```
+
+**Pointing the GCS at a fresh RPi:**
+
+1. Generate a key pair if you don't have one: `ssh-keygen -t ed25519 -f ~/.ssh/drishti_rpi -N ""`.
+2. Install the public key on the RPi: `ssh-copy-id -i ~/.ssh/drishti_rpi.pub pi@<rpi-ip>` (the RPi must allow key auth).
+3. Set `hostname`/`key_path` in `rpi.yaml` (or the env vars above), or just type the host/user/key path into the Panel 1 form.
+4. Connect → Start. The panel shows `waiting for logger` until `record_session.py` on the RPi begins writing `timestamps.csv`, then streams per-frame altitude/heading/position.
+
+Key contents and resolved key paths are never logged.
+
 ### Tests
 
 ```bash
 cd backend
-uv run pytest tests/ -v
+uv run pytest tests/ -v          # backend (pytest)
+
+cd ../frontend
+npm run test                     # frontend (Vitest)
 ```
 
 ---
@@ -84,7 +117,8 @@ The following are not yet wired to real hardware and run on mock data:
 
 | Component | Status | Notes |
 |---|---|---|
-| Panel 1 SSH connect/start/stop | Mocked | Returns success immediately; use terminal SSH for real recording |
+| Panel 1 SSH connect/start/stop | **Real** | Persistent SSH + `tail -F` of `timestamps.csv`; HDOP/disk/sats tiles still mock (not in the CSV) |
+| Panel 1 idle status walk | Mock | When no session is recording, the status stream random-walks GPS so the Live Map keeps animating in dev |
 | Panel 7 telemetry SSE | Mock animation | Real MAVLink telemetry bridge planned for Phase C |
 | Pipeline subprocess | Graceful stub | Set `DRISHTI_NAV_PATH` in `backend/.env` to enable; otherwise Panel 4 shows an error message |
 | All panels on startup | Mock data | Backend generates a 100-frame mock session and mock pipeline results at startup via `lifespan` |
@@ -93,7 +127,7 @@ The following are not yet wired to real hardware and run on mock data:
 
 ## Next Planned Features
 
-- **Real SSH wiring in Panel 1** — trigger `record_session.py` on RPi over Paramiko (post June 4 flight)
+- **Trigger `record_session.py` over SSH** — Panel 1 now tails a running logger; remote start/stop of the logger process itself is the next step
 - **Session comparison view** — two Panel 5 benchmark summaries side by side for before/after tuning
 - **Tile DB inspector** — click map tile in Panel 4 to view FAISS coverage and retrieval candidates
 - **MAVLink telemetry bridge** — replace mock Panel 7 SSE with live Pixhawk telemetry via pymavlink (Phase C)
@@ -105,20 +139,27 @@ The following are not yet wired to real hardware and run on mock data:
 ```
 drishti-gcs-app/
 ├── backend/
+│   ├── config/rpi.yaml        # Panel 1 SSH connection defaults
 │   ├── drishti/perception/solver_timer.py   # SolverTiming dataclass
 │   ├── routers/
-│   │   ├── logger.py      # Panel 1 + 2: connect/start/stop/status SSE/preflight
+│   │   ├── logger.py      # Panel 1: real SSH tail + status SSE + preflight
 │   │   ├── session.py     # Panel 3: load session, serve frames, verify
 │   │   ├── pipeline.py    # Panel 4 + 5: run pipeline, frame-pair, benchmark
 │   │   └── telemetry.py   # Panel 7: live telemetry SSE
 │   ├── services/
+│   │   ├── ssh_client.py      # RpiSshClient: persistent SSH tail -F + reconnect
+│   │   ├── mock_ssh.py        # FakeSSHClient for tests
+│   │   ├── timestamps_csv.py  # per-frame timestamps.csv parser (shared)
 │   │   ├── nmea_parser.py     # $GPRMC/$GPGGA/$HCHDG parser
-│   │   └── session_loader.py  # frame↔GPS sync (1500 ms tolerance)
+│   │   └── session_loader.py  # frame↔GPS sync (1500 ms); merges CSV altitude
 │   ├── scripts/benchmark.py   # CLI benchmark report with solver timing
-│   ├── tests/test_solver_timer.py
+│   ├── tests/
+│   │   ├── test_solver_timer.py
+│   │   ├── test_ssh_client.py
+│   │   └── test_panel1_integration.py
 │   └── main.py
 └── frontend/src/components/
-    ├── LoggingPanel.jsx
+    ├── LoggingPanel.jsx          # + LoggingPanel.test.jsx (Vitest)
     ├── LiveMapPanel.jsx
     ├── ReplayPanel.jsx
     ├── AlgorithmPanel.jsx

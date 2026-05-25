@@ -94,7 +94,9 @@ def generate_mock_session() -> str:
 
     lat, lon = _DEOLALI_LAT, _DEOLALI_LON
     heading, hdir = 60.0, 1.0
+    altitude = 80.0
     nmea_lines: list[str] = []
+    ts_rows: list[str] = ["unix_ms,frame_path,lat,lon,altitude_m,heading_deg"]
 
     for i in range(n_frames):
         ts_ms = start_ms + int(i * duration_ms / (n_frames - 1))
@@ -102,6 +104,7 @@ def generate_mock_session() -> str:
         lat += random.uniform(-0.00008, 0.00008)
         lon += random.uniform(-0.00008, 0.00008)
         hdop = round(random.uniform(0.6, 1.2), 1)
+        altitude = round(max(60.0, min(100.0, altitude + random.uniform(-1.5, 1.5))), 1)
 
         heading += hdir * random.uniform(0.5, 2.0)
         if heading > 90.0:
@@ -123,8 +126,10 @@ def generate_mock_session() -> str:
         nmea_lines.append(_fmt_gprmc(ts_ms, lat, lon, heading))
         nmea_lines.append(_fmt_gpgga(ts_ms, lat, lon, hdop))
         nmea_lines.append(_fmt_hchdg(heading))
+        ts_rows.append(f"{ts_ms},frames/{ts_ms}.jpg,{lat:.6f},{lon:.6f},{altitude},{heading % 360.0:.1f}")
 
     (Path(tmpdir) / "gps.nmea").write_text('\n'.join(nmea_lines) + '\n')
+    (Path(tmpdir) / "timestamps.csv").write_text('\n'.join(ts_rows) + '\n')
     return tmpdir
 
 
