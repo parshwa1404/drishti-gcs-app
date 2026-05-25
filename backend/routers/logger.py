@@ -60,6 +60,27 @@ _live = {
 }
 _live_lock = threading.Lock()
 
+# In-process fan-out of per-frame records to other panels (e.g. Panel 6
+# preflight) so they consume the same SSH tail without re-parsing the CSV.
+_record_subscribers: list = []
+
+
+def subscribe_records(callback) -> None:
+    """Register a callback invoked with each per-frame record from the tail."""
+    if callback not in _record_subscribers:
+        _record_subscribers.append(callback)
+
+
+def unsubscribe_records(callback) -> None:
+    if callback in _record_subscribers:
+        _record_subscribers.remove(callback)
+
+
+def current_connection_status():
+    """SSH connection state from the active client, or None if never connected."""
+    client = _state.get("client")
+    return client.connection_status if client is not None else None
+
 
 def _on_record(rec: dict) -> None:
     """Tail-thread callback: fold one timestamps.csv record into shared state."""
@@ -73,6 +94,13 @@ def _on_record(rec: dict) -> None:
     # Mirror position so Panel 2 (/session/live) tracks the real flight.
     _state["lat"] = rec["lat"]
     _state["lon"] = rec["lon"]
+    # Fan out to subscribers (preflight, etc.). One bad subscriber must not
+    # break the tail loop.
+    for cb in list(_record_subscribers):
+        try:
+            cb(rec)
+        except Exception:  # noqa: BLE001 - isolate subscriber failures
+            pass
 
 
 def _reset_live() -> None:

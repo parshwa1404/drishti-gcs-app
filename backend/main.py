@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import session, pipeline, logger, telemetry
+from routers import session, pipeline, logger, telemetry, preflight
 
 
 @asynccontextmanager
@@ -27,6 +27,7 @@ app.include_router(logger.router,    prefix="/logger",    tags=["logger"])
 app.include_router(session.router,   prefix="/session",   tags=["session"])
 app.include_router(pipeline.router,  prefix="/pipeline",  tags=["pipeline"])
 app.include_router(telemetry.router, prefix="/telemetry", tags=["telemetry"])
+app.include_router(preflight.router, prefix="/preflight", tags=["preflight"])
 
 
 @app.get("/health")
