@@ -370,6 +370,7 @@ export default function ReplayPanel() {
                         : '—'],
                       ['Heading', frame.heading_deg != null ? `${frame.heading_deg.toFixed(1)}°` : '—'],
                       ['HDOP', frame.hdop != null ? frame.hdop.toFixed(2) : '—'],
+                      ...(frame.altitude_m != null ? [['Altitude', `${frame.altitude_m.toFixed(1)} m`]] : []),
                     ].map(([label, value]) => (
                       <tr key={label}>
                         <td className="py-1.5 pr-6 text-gray-400 w-28">{label}</td>

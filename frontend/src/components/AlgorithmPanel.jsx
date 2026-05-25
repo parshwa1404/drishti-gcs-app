@@ -338,6 +338,7 @@ export default function AlgorithmPanel() {
               <MetricRow label="Inliers"           value={fp?.inlier_count} />
               <MetricRow label="Position error"    value={fp?.position_error_m != null ? fp.position_error_m.toFixed(1) : null} unit=" m" />
               <MetricRow label="Camera GSD"        value={fp?.camera_gsd_m_per_px != null ? fp.camera_gsd_m_per_px.toFixed(3) : null} unit=" m/px" />
+              <MetricRow label="Altitude"          value={fp?.altitude_m != null ? fp.altitude_m.toFixed(1) : null} unit=" m" />
               <div className="flex flex-col items-center py-2 border-b border-gray-700">
                 <span className="text-xs text-gray-500 mb-0.5">Pre-filter</span>
                 {fp?.reject_reason ? (
