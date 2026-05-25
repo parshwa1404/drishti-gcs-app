@@ -1,0 +1,14 @@
+# Panel 6 (Pre-flight) GO/NO-GO thresholds. Operator may edit before a flight.
+#
+# For the Deolali June 4 flight: cruise ~80 m AGL, so 50–200 m bounds give
+# generous margin around takeoff/landing and altitude hold.
+
+preflight:
+  altitude_min_m: 50.0
+  altitude_max_m: 200.0
+  frame_rate_window_s: 10.0
+  frame_rate_pass_hz: 5.0
+  frame_rate_warn_hz: 3.0
+  frame_max_age_pass_s: 5.0
+  frame_max_age_warn_s: 15.0
+  heading_stuck_count: 10

@@ -1,183 +1,164 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const API = 'http://localhost:8000';
 
-const CHECK_META = {
-  gps_fix:       { label: 'GPS Fix',         icon: '🛰' },
-  heading:       { label: 'Heading',          icon: '🧭' },
-  frame_counter: { label: 'Camera Stream',   icon: '📷' },
-  tile_db:       { label: 'Tile Database',   icon: '🗺' },
-  disk_space:    { label: 'Disk Space',      icon: '💾' },
-  gsd_norm:      { label: 'GSD Normalisation', icon: '📐' },
+const CHECK_LABELS = {
+  rpi_connection:  'RPi Connection',
+  logger_active:   'Logger Active',
+  frame_rate:      'Frame Rate',
+  gps_fix:         'GPS Fix',
+  altitude_sane:   'Altitude',
+  heading_present: 'Heading',
+  gps_hdop:        'GPS HDOP',
+  satellite_count: 'Satellites',
+  disk_free:       'Disk Free',
+  camera_exposure: 'Camera Exposure',
+  fc_link:         'FC Link',
+  tile_db_loaded:  'Tile DB',
 };
 
-const CHECK_ORDER = ['gps_fix', 'heading', 'frame_counter', 'tile_db', 'disk_space', 'gsd_norm'];
+const STATE_STYLE = {
+  pass:        { tile: 'border-green-700 bg-green-950/40', pill: 'bg-green-600 text-white',  label: 'PASS' },
+  warn:        { tile: 'border-amber-700 bg-amber-950/40', pill: 'bg-amber-500 text-black',  label: 'WARN' },
+  fail:        { tile: 'border-red-700 bg-red-950/40',     pill: 'bg-red-600 text-white',    label: 'FAIL' },
+  unavailable: { tile: 'border-gray-800 bg-gray-800/40',   pill: 'bg-gray-700 text-gray-400', label: '—' },
+};
 
-function CheckRow({ id, result }) {
-  const meta = CHECK_META[id] ?? { label: id, icon: '•' };
-  const pass = result?.pass;
+const OVERALL_STYLE = {
+  'GO':      'border-green-600 bg-green-950/50 text-green-300',
+  'CAUTION': 'border-amber-600 bg-amber-950/50 text-amber-300',
+  'NO-GO':   'border-red-600 bg-red-950/50 text-red-300',
+};
 
+const OVERALL_BADGE = {
+  'GO':      'bg-green-600 text-white',
+  'CAUTION': 'bg-amber-500 text-black',
+  'NO-GO':   'bg-red-600 text-white',
+};
+
+function fmtClock(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function CheckTile({ check }) {
+  const style = STATE_STYLE[check.state] ?? STATE_STYLE.unavailable;
+  const label = CHECK_LABELS[check.check_id] ?? check.check_id;
   return (
-    <div className={`flex items-start gap-4 px-5 py-3.5 rounded-lg border transition-colors
-                     ${pass === true  ? 'border-green-800 bg-green-950/40'
-                     : pass === false ? 'border-red-800 bg-red-950/40'
-                     :                  'border-gray-800 bg-gray-800/40'}`}>
-      {/* Pass/fail indicator */}
-      <div className={`mt-0.5 w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-sm font-bold
-                       ${pass === true  ? 'bg-green-600 text-white'
-                       : pass === false ? 'bg-red-600 text-white'
-                       :                  'bg-gray-700 text-gray-400'}`}>
-        {pass === true ? '✓' : pass === false ? '✗' : '?'}
+    <div title={check.message || ''}
+         className={`rounded-lg border p-4 flex flex-col gap-2 ${style.tile}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-gray-200">{label}</span>
+        <span className={`px-2 py-0.5 rounded text-xs font-bold tracking-wide ${style.pill}`}>
+          {style.label}
+        </span>
       </div>
-
-      {/* Label */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-gray-200">{meta.label}</span>
-        </div>
-        {result && (
-          <div className={`text-xs mt-0.5 font-mono
-                           ${pass ? 'text-gray-400' : 'text-red-300'}`}>
-            {result.message}
-          </div>
-        )}
+      <div className="text-xs font-mono text-gray-400 truncate">
+        {check.state === 'unavailable'
+          ? <span className="text-gray-600">data unavailable</span>
+          : (check.value != null ? String(check.value) : '—')}
       </div>
-
-      {/* Numeric detail */}
-      {result && (
-        <div className="text-xs font-mono text-gray-500 text-right shrink-0 self-center">
-          {id === 'gps_fix'       && result.satellites != null && `${result.satellites} sats`}
-          {id === 'heading'       && result.heading_deg != null && `${result.heading_deg.toFixed(1)}°`}
-          {id === 'frame_counter' && result.fps != null && `${result.fps} fps`}
-          {id === 'tile_db'       && result.tile_count != null && `${result.tile_count} tiles`}
-          {id === 'disk_space'    && result.free_gb != null && `${result.free_gb} GB`}
-        </div>
-      )}
     </div>
   );
 }
 
 export default function ChecklistPanel() {
-  const [checks, setChecks]       = useState(null);
-  const [loading, setLoading]     = useState(false);
-  const [failDemo, setFailDemo]   = useState(false);
-  const [error, setError]         = useState('');
+  const [report, setReport]   = useState(null);
+  const [connected, setConn]  = useState(false);
+  const [lastRecv, setLast]   = useState(null);
+  const [, setTick]           = useState(0);
+  const sseRef = useRef(null);
 
-  async function runChecks(demo = failDemo) {
-    setLoading(true);
-    setError('');
-    try {
-      const url = `${API}/logger/preflight${demo ? '?fail_demo=true' : ''}`;
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setChecks(await r.json());
-    } catch (e) {
-      setError(`Cannot reach backend: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    const es = new EventSource(`${API}/preflight/status`);
+    sseRef.current = es;
+    es.onopen = () => setConn(true);
+    es.onmessage = (e) => {
+      try {
+        setReport(JSON.parse(e.data));
+        setLast(Date.now());
+      } catch { /* ignore */ }
+    };
+    es.onerror = () => setConn(false);
+    return () => es.close();
+  }, []);
 
-  function handleToggleDemo(val) {
-    setFailDemo(val);
-    if (checks) runChecks(val);
-  }
+  // 1 Hz ticker so the data-lag readout advances even without new events.
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
-  const allPass  = checks && CHECK_ORDER.every((k) => checks[k]?.pass !== false);
-  const failing  = checks ? CHECK_ORDER.filter((k) => checks[k]?.pass === false) : [];
+  const overall = report?.overall;
+  const checks = report?.checks ?? [];
+  const mandatory = checks.filter((c) => c.state !== 'unavailable');
+  const stubbed = checks.filter((c) => c.state === 'unavailable');
+
+  const lagS = lastRecv != null ? (Date.now() - lastRecv) / 1000 : null;
+  const stale = lagS != null && lagS > 3;
 
   return (
     <div className="h-[calc(100vh-56px)] overflow-y-auto bg-gray-900 p-6">
-      <div className="max-w-2xl mx-auto space-y-5">
+      <div className="max-w-4xl mx-auto space-y-5">
 
-        {/* ── Header ── */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-white tracking-wide">Pre-flight Checklist</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Run before arming. All checks must pass for GO status.</p>
-          </div>
-
-          {/* Simulate failures toggle */}
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <span className="text-xs text-gray-400">Simulate failures</span>
-            <button
-              role="switch"
-              aria-checked={failDemo}
-              onClick={() => handleToggleDemo(!failDemo)}
-              className={`relative w-9 h-5 rounded-full transition-colors
-                          ${failDemo ? 'bg-amber-600' : 'bg-gray-700'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white
-                                transition-transform ${failDemo ? 'translate-x-4' : 'translate-x-0'}`} />
-            </button>
-          </label>
+        <div>
+          <h2 className="text-xl font-bold text-white tracking-wide">Pre-flight Check</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Live GO/NO-GO from the RPi logger stream. Unavailable checks do not block GO.
+          </p>
         </div>
 
-        {/* ── Run button ── */}
-        <button
-          onClick={() => runChecks()}
-          disabled={loading}
-          className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40
-                     rounded-lg text-sm font-bold text-white transition-colors tracking-wide"
-        >
-          {loading ? 'Running checks…' : checks ? '↻  Re-run Pre-flight Check' : '▶  Run Pre-flight Check'}
-        </button>
-
-        {error && (
-          <div className="px-4 py-3 bg-red-950/60 border border-red-800 rounded-lg text-sm text-red-300">
-            {error}
+        {/* ── Overall verdict ── */}
+        <div className={`rounded-xl border-2 p-6 text-center transition-colors
+                         ${OVERALL_STYLE[overall] ?? 'border-gray-700 bg-gray-800/50 text-gray-400'}`}>
+          <div className={`inline-block px-8 py-3 rounded-full text-3xl font-black tracking-widest
+                           ${OVERALL_BADGE[overall] ?? 'bg-gray-700 text-gray-300'}`}>
+            {overall ?? 'WAITING'}
           </div>
-        )}
+          <p className="text-sm font-semibold mt-3">
+            {overall === 'GO' && 'All mandatory checks pass — safe to arm'}
+            {overall === 'CAUTION' && 'A mandatory check is in warning — review before arming'}
+            {overall === 'NO-GO' && 'A mandatory check failed — do not arm'}
+            {!overall && 'Waiting for preflight stream…'}
+          </p>
+        </div>
 
-        {/* ── Check rows ── */}
-        {checks && (
-          <div className="space-y-2">
-            {CHECK_ORDER.map((id) => (
-              <CheckRow key={id} id={id} result={checks[id]} />
-            ))}
-          </div>
-        )}
-
-        {/* ── GO / NO-GO verdict ── */}
-        {checks && (
-          <div className={`rounded-xl border-2 p-6 text-center transition-colors
-                           ${allPass
-                             ? 'border-green-600 bg-green-950/50'
-                             : 'border-red-600 bg-red-950/50'}`}>
-
-            {/* Badge */}
-            <div className={`inline-block px-8 py-3 rounded-full text-3xl font-black tracking-widest mb-3
-                             ${allPass ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
-              {allPass ? 'GO' : 'NO-GO'}
+        {/* ── Mandatory checks ── */}
+        {mandatory.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Mandatory</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {mandatory.map((c) => <CheckTile key={c.check_id} check={c} />)}
             </div>
-
-            {allPass ? (
-              <p className="text-green-300 font-semibold text-sm mt-1">
-                All checks passed — safe to arm
-              </p>
-            ) : (
-              <div className="mt-1 space-y-1">
-                <p className="text-red-300 font-semibold text-sm">
-                  {failing.length} check{failing.length > 1 ? 's' : ''} failed — do not arm
-                </p>
-                <ul className="text-xs text-red-400 space-y-0.5">
-                  {failing.map((k) => (
-                    <li key={k}>
-                      ✗ {CHECK_META[k]?.label ?? k}: {checks[k]?.message}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Placeholder before first run */}
-        {!checks && !error && (
-          <div className="text-center text-gray-600 text-sm py-8">
-            Press the button above to run checks
+        {/* ── Stubbed / awaiting data ── */}
+        {stubbed.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">
+              Awaiting data
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {stubbed.map((c) => <CheckTile key={c.check_id} check={c} />)}
+            </div>
           </div>
         )}
+
+        {/* ── Bottom strip ── */}
+        <div className="flex items-center justify-between text-xs text-gray-500 pt-1 border-t border-gray-800">
+          <span>
+            {connected ? 'stream connected' : 'stream disconnected'}
+            {report && <> · last update {fmtClock(report.timestamp_ms)}</>}
+          </span>
+          {lagS != null && (
+            <span className={stale ? 'text-amber-400 font-semibold' : ''}>
+              {stale ? `data lag ${lagS.toFixed(0)}s` : `updated ${lagS.toFixed(0)}s ago`}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

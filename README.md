@@ -23,8 +23,8 @@ Loads pipeline results and lets you scrub through frames with a 40-entry LRU ima
 **Panel 5 — Benchmark Summary**
 Displays Cut A (all non-rejected frames) and Cut B (inliers ≥ gate) statistics tables side by side with colour-coded diffs against the IIT-B baseline (median 32.5 m, p75 48.2 m, p90 67.8 m). Below, a 3×2 chart grid shows: Position Error Distribution (Cut A grey / Cut B blue bars), Inlier Count Distribution (amber below gate, blue above), Heading vs Inlier scatter with 210°–240° danger-zone shading, Frame Confidence Distribution (amber→teal gradient), **Solver Time histogram** (5 bins: 0–50 / 50–100 / 100–200 / 200–500 / 500+ ms), and **Fix Gap histogram** (5 bins colour-coded green/green/amber/red/red). An Export PNG button captures the full panel via html2canvas.
 
-**Panel 6 — Pre-flight Checklist**
-Runs six checks against the backend: GPS fix quality (HDOP < 2.0, ≥ 8 satellites), heading stability (variance < 5°), camera frame rate, tile database load, disk space, and GSD normalisation status. Each check shows a coloured border, pass/fail circle, label, and detail message. A GO verdict (green, "Safe to arm") requires all six to pass; any failure produces a NO-GO verdict (red) with a bulleted list of failing items. A "Simulate failures" toggle re-fetches with `fail_demo=true` for demo purposes.
+**Panel 6 — Pre-flight Check**
+A live GO / CAUTION / NO-GO dashboard driven by the `/preflight/status` SSE stream. The backend `PreflightEvaluator` consumes the same per-frame records the Panel 1 SSH tail emits (no CSV re-parsing) and grades six **mandatory** checks — `rpi_connection`, `logger_active`, `frame_rate`, `gps_fix`, `altitude_sane`, `heading_present` — each `pass` / `warn` / `fail`. The overall badge is the worst mandatory state: **GO** (all pass), **CAUTION** (any warn, no fail), **NO-GO** (any fail). Six **stubbed** checks (`gps_hdop`, `satellite_count`, `disk_free`, `camera_exposure`, `fc_link`, `tile_db_loaded`) render a grey "data unavailable" tile with hover text naming the awaited field; they never block GO. A bottom strip shows stream connection, last-update time, and a data-lag readout. Thresholds live in `backend/config/preflight.yaml`.
 
 **Panel 7 — Live Feed**
 Polls `GET /telemetry/status` at 2 Hz via SSE and shows the last-known UAV state. A top status bar displays a large CONNECTED (green) / WEAK SIGNAL (amber) / LOST (red) pill, a session timer, and a reconnect countdown when WiFi is lost. The left column shows altitude and groundspeed with 60-point SVG sparklines, a rotating compass rose, and a colour-coded battery bar. The right column shows frames captured, disk free, GPS HDOP, satellite count, and session duration. A mini Leaflet map auto-pans to the latest GPS fix; it goes greyscale with a "Last known position" overlay when the connection drops.
@@ -85,6 +85,26 @@ export DRISHTI_RPI_SESSION_DIR=~/drishti_sessions
 
 Key contents and resolved key paths are never logged.
 
+### Pre-flight thresholds (Panel 6)
+
+Panel 6 grades the live `/logger/status` record stream against `backend/config/preflight.yaml`:
+
+```yaml
+preflight:
+  altitude_min_m: 50.0        # cruise ~80 m AGL for Deolali; 50–200 gives margin
+  altitude_max_m: 200.0
+  frame_rate_window_s: 10.0   # rolling window for the Hz average
+  frame_rate_pass_hz: 5.0     # ≥ pass, [warn, pass) warns, < warn fails
+  frame_rate_warn_hz: 3.0
+  frame_max_age_pass_s: 5.0   # last-frame age: ≤ pass, ≤ warn warns, else fails
+  frame_max_age_warn_s: 15.0
+  heading_stuck_count: 10     # N identical consecutive headings → warn (frozen mag)
+```
+
+Edit these before a flight to match the mission profile, then restart the backend.
+
+**Checks stubbed pending a drishti-rpi-logger CSV update** (rendered as grey "data unavailable" tiles, do not block GO): `gps_hdop`, `satellite_count`, `disk_free` (await new CSV columns), `camera_exposure` (no field defined), `fc_link` (Phase C MAVLink), `tile_db_loaded` (no endpoint yet).
+
 ### Tests
 
 ```bash
@@ -141,8 +161,12 @@ drishti-gcs-app/
 ├── backend/
 │   ├── config/rpi.yaml        # Panel 1 SSH connection defaults
 │   ├── drishti/perception/solver_timer.py   # SolverTiming dataclass
+│   ├── config/
+│   │   ├── rpi.yaml           # Panel 1 SSH connection defaults
+│   │   └── preflight.yaml     # Panel 6 GO/NO-GO thresholds
 │   ├── routers/
-│   │   ├── logger.py      # Panel 1: real SSH tail + status SSE + preflight
+│   │   ├── logger.py      # Panel 1: real SSH tail + status SSE + record fan-out
+│   │   ├── preflight.py   # Panel 6: /preflight/status GO/NO-GO SSE
 │   │   ├── session.py     # Panel 3: load session, serve frames, verify
 │   │   ├── pipeline.py    # Panel 4 + 5: run pipeline, frame-pair, benchmark
 │   │   └── telemetry.py   # Panel 7: live telemetry SSE
@@ -150,13 +174,16 @@ drishti-gcs-app/
 │   │   ├── ssh_client.py      # RpiSshClient: persistent SSH tail -F + reconnect
 │   │   ├── mock_ssh.py        # FakeSSHClient for tests
 │   │   ├── timestamps_csv.py  # per-frame timestamps.csv parser (shared)
+│   │   ├── preflight.py       # PreflightEvaluator: rolling checks + verdict
 │   │   ├── nmea_parser.py     # $GPRMC/$GPGGA/$HCHDG parser
 │   │   └── session_loader.py  # frame↔GPS sync (1500 ms); merges CSV altitude
 │   ├── scripts/benchmark.py   # CLI benchmark report with solver timing
 │   ├── tests/
 │   │   ├── test_solver_timer.py
 │   │   ├── test_ssh_client.py
-│   │   └── test_panel1_integration.py
+│   │   ├── test_panel1_integration.py
+│   │   ├── test_preflight.py
+│   │   └── test_preflight_endpoint.py
 │   └── main.py
 └── frontend/src/components/
     ├── LoggingPanel.jsx          # + LoggingPanel.test.jsx (Vitest)
