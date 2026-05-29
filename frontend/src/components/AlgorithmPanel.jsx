@@ -220,13 +220,6 @@ export default function AlgorithmPanel() {
         >
           {running ? 'Running…' : '▶ Run Pipeline'}
         </button>
-        <button
-          onClick={handleLoadMock}
-          className="px-4 py-1.5 bg-gray-600 hover:bg-gray-500
-                     rounded text-sm font-semibold text-white transition-colors"
-        >
-          Load Mock Results
-        </button>
         {results && (
           <span className="text-xs text-gray-500 font-mono whitespace-nowrap">
             {results.frame_count} frames · <span className="text-gray-400">{results.session_name}</span>
