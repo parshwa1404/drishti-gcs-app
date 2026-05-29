@@ -1,9 +1,8 @@
 import asyncio
 import json
-import random
+import shlex
 import tempfile
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -16,121 +15,16 @@ from services.session_loader import load_session as _do_load
 
 router = APIRouter()
 
-_DEOLALI_LAT = 19.9175
-_DEOLALI_LON = 73.8278
-
-# Single loaded session; None until POST /session/load or startup mock
+# Single loaded session; None until POST /session/load or fetch-remote
 _session: dict | None = None
-_mock_tmpdir: str | None = None   # keep reference so tempdir persists
 
 
 class LoadRequest(BaseModel):
     session_dir: str
 
 
-# ─── NMEA helpers ────────────────────────────────────────────────────────────
-
-def _nmea_cs(body: str) -> str:
-    chk = 0
-    for c in body:
-        chk ^= ord(c)
-    return f"{chk:02X}"
-
-
-def _fmt_gprmc(ts_ms: int, lat: float, lon: float, heading: float) -> str:
-    dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
-    t = dt.strftime('%H%M%S')
-    d = dt.strftime('%d%m%y')
-    la_d, lo_d = int(abs(lat)), int(abs(lon))
-    la_m = (abs(lat) - la_d) * 60
-    lo_m = (abs(lon) - lo_d) * 60
-    la_s = f"{la_d:02d}{la_m:09.6f}"
-    lo_s = f"{lo_d:03d}{lo_m:09.6f}"
-    la_h = 'N' if lat >= 0 else 'S'
-    lo_h = 'E' if lon >= 0 else 'W'
-    body = f"GPRMC,{t}.000,A,{la_s},{la_h},{lo_s},{lo_h},0.0,{heading:.1f},{d},,"
-    return f"${body}*{_nmea_cs(body)}"
-
-
-def _fmt_gpgga(ts_ms: int, lat: float, lon: float, hdop: float) -> str:
-    dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
-    t = dt.strftime('%H%M%S')
-    la_d, lo_d = int(abs(lat)), int(abs(lon))
-    la_m = (abs(lat) - la_d) * 60
-    lo_m = (abs(lon) - lo_d) * 60
-    la_s = f"{la_d:02d}{la_m:09.6f}"
-    lo_s = f"{lo_d:03d}{lo_m:09.6f}"
-    la_h = 'N' if lat >= 0 else 'S'
-    lo_h = 'E' if lon >= 0 else 'W'
-    body = f"GPGGA,{t}.000,{la_s},{la_h},{lo_s},{lo_h},1,10,{hdop:.1f},100.0,M,,,,0000"
-    return f"${body}*{_nmea_cs(body)}"
-
-
-def _fmt_hchdg(heading: float) -> str:
-    body = f"HCHDG,{heading:.1f},,,0.0,E"
-    return f"${body}*{_nmea_cs(body)}"
-
-
-# ─── Mock generator ──────────────────────────────────────────────────────────
-
-def generate_mock_session() -> str:
-    global _mock_tmpdir
-
-    try:
-        import numpy as np
-        from PIL import Image
-        has_imaging = True
-    except ImportError:
-        has_imaging = False
-
-    tmpdir = tempfile.mkdtemp(prefix="drishti_mock_")
-    _mock_tmpdir = tmpdir
-    frames_dir = Path(tmpdir) / "frames"
-    frames_dir.mkdir()
-
-    n_frames = 100
-    duration_ms = 30_000
-    start_ms = int(time.time() * 1000) - duration_ms
-
-    lat, lon = _DEOLALI_LAT, _DEOLALI_LON
-    heading, hdir = 60.0, 1.0
-    altitude = 80.0
-    nmea_lines: list[str] = []
-    ts_rows: list[str] = ["unix_ms,frame_path,lat,lon,altitude_m,heading_deg"]
-
-    for i in range(n_frames):
-        ts_ms = start_ms + int(i * duration_ms / (n_frames - 1))
-
-        lat += random.uniform(-0.00008, 0.00008)
-        lon += random.uniform(-0.00008, 0.00008)
-        hdop = round(random.uniform(0.6, 1.2), 1)
-        altitude = round(max(60.0, min(100.0, altitude + random.uniform(-1.5, 1.5))), 1)
-
-        heading += hdir * random.uniform(0.5, 2.0)
-        if heading > 90.0:
-            hdir = -1.0
-        elif heading < 30.0:
-            hdir = 1.0
-
-        frame_path = frames_dir / f"{ts_ms}.jpg"
-        if has_imaging:
-            import numpy as np
-            from PIL import Image
-            arr = np.random.randint(30, 120, (60, 80, 3), dtype=np.uint8)
-            arr[28:32, :, :] = 60   # faint horizontal band
-            Image.fromarray(arr, 'RGB').save(str(frame_path), format='JPEG', quality=70)
-        else:
-            frame_path.write_bytes(_minimal_jpeg())
-
-        # GPRMC first so parser can assign timestamp; GPGGA + HCHDG annotate it
-        nmea_lines.append(_fmt_gprmc(ts_ms, lat, lon, heading))
-        nmea_lines.append(_fmt_gpgga(ts_ms, lat, lon, hdop))
-        nmea_lines.append(_fmt_hchdg(heading))
-        ts_rows.append(f"{ts_ms},frames/{ts_ms}.jpg,{lat:.6f},{lon:.6f},{altitude},{heading % 360.0:.1f}")
-
-    (Path(tmpdir) / "gps.nmea").write_text('\n'.join(nmea_lines) + '\n')
-    (Path(tmpdir) / "timestamps.csv").write_text('\n'.join(ts_rows) + '\n')
-    return tmpdir
+class FetchRemoteRequest(BaseModel):
+    remote_path: str
 
 
 def load_session_state(session_dir: str) -> None:
@@ -144,35 +38,57 @@ def _session_response() -> dict | None:
     return {k: v for k, v in _session.items() if k != 'frame_map'}
 
 
-# ─── Minimal fallback JPEG (1×1 grey) ────────────────────────────────────────
-
-def _minimal_jpeg() -> bytes:
-    return bytes([
-        0xFF,0xD8,0xFF,0xE0,0x00,0x10,0x4A,0x46,0x49,0x46,0x00,0x01,0x01,0x00,
-        0x00,0x01,0x00,0x01,0x00,0x00,0xFF,0xDB,0x00,0x43,0x00,0x08,0x06,0x06,
-        0x07,0x06,0x05,0x08,0x07,0x07,0x07,0x09,0x09,0x08,0x0A,0x0C,0x14,0x0D,
-        0x0C,0x0B,0x0B,0x0C,0x19,0x12,0x13,0x0F,0x14,0x1D,0x1A,0x1F,0x1E,0x1D,
-        0x1A,0x1C,0x1C,0x20,0x24,0x2E,0x27,0x20,0x22,0x2C,0x23,0x1C,0x1C,0x28,
-        0x37,0x29,0x2C,0x30,0x31,0x34,0x34,0x34,0x1F,0x27,0x39,0x3D,0x38,0x32,
-        0x3C,0x2E,0x33,0x34,0x32,0xFF,0xC0,0x00,0x0B,0x08,0x00,0x01,0x00,0x01,
-        0x01,0x01,0x11,0x00,0xFF,0xC4,0x00,0x1F,0x00,0x00,0x01,0x05,0x01,0x01,
-        0x01,0x01,0x01,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x02,
-        0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0xFF,0xC4,0x00,0x35,0x10,
-        0x00,0x02,0x01,0x03,0x03,0x02,0x04,0x03,0x05,0x05,0x04,0x04,0x00,0x00,
-        0x01,0x7D,0x01,0x02,0x03,0x00,0x04,0x11,0x05,0x12,0x21,0x31,0x41,0xFF,
-        0xDA,0x00,0x08,0x01,0x01,0x00,0x00,0x3F,0x00,0xF5,0x00,0xFF,0xD9,
-    ])
-
-
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
-@router.get("/mock")
-async def get_mock():
-    """Return the pre-loaded mock session metadata."""
-    data = _session_response()
-    if data is None:
-        raise HTTPException(status_code=503, detail="Mock session not yet initialized")
-    return data
+@router.post("/fetch-remote")
+async def fetch_remote(body: FetchRemoteRequest):
+    """Download a session from the connected Jetson/RPi and load it.
+
+    If the remote directory contains a ROS2 .db3 bag, it extracts frames + GPS
+    on the Jetson first (so we download only ~15 MB of JPEGs instead of gigabytes).
+    Otherwise it does a plain SFTP recursive download.
+    """
+    from routers.logger import _state as logger_state
+    from services.ros2_bag_extractor import is_ros2_bag, extract_and_download
+
+    client = logger_state.get("client")
+    if client is None or not client.is_connected:
+        raise HTTPException(status_code=409, detail="SSH not connected — connect in the Logging panel first")
+
+    bag_is_ros2 = await asyncio.to_thread(is_ros2_bag, client, body.remote_path)
+
+    if not bag_is_ros2:
+        # Also check for legacy DRISHTI session format (frames/ subdirectory).
+        _, stdout, _ = client._client.exec_command(
+            f"test -d {shlex.quote(body.remote_path + '/frames')} && echo 1 || echo 0"
+        )
+        has_frames_dir = stdout.read().decode().strip() == "1"
+        if not has_frames_dir:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "No image data found in this bag — the .db3 file is missing. "
+                    "The recording may have been interrupted before any data was written."
+                ),
+            )
+
+    tmpdir = tempfile.mkdtemp(prefix="drishti_remote_")
+    try:
+        if bag_is_ros2:
+            await asyncio.to_thread(extract_and_download, client, body.remote_path, tmpdir)
+        else:
+            await asyncio.to_thread(client.download_session_dir, body.remote_path, tmpdir)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    try:
+        load_session_state(tmpdir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return _session_response()
+
 
 
 @router.post("/load")
@@ -277,13 +193,15 @@ def _pct_list(s: list[float], p: float) -> float:
 
 @router.get("/live")
 async def live():
-    """SSE stream of GPS fixes aliasing the logger mock random walk."""
+    """SSE stream of real GPS fixes from the active logger tail."""
     async def event_generator():
         while True:
+            lat = logger_state.get("lat")
+            lon = logger_state.get("lon")
             payload = {
-                "lat": round(logger_state["lat"], 7),
-                "lon": round(logger_state["lon"], 7),
-                "hdop": round(random.uniform(0.6, 1.8), 2),
+                "lat": round(lat, 7) if lat is not None else None,
+                "lon": round(lon, 7) if lon is not None else None,
+                "hdop": None,
                 "timestamp_ms": int(time.time() * 1000),
             }
             yield {"data": json.dumps(payload)}

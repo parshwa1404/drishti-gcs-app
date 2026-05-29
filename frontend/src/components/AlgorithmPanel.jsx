@@ -89,13 +89,7 @@ export default function AlgorithmPanel() {
   const fpCacheRef = useRef(new Map());
   const sseRef     = useRef(null);
 
-  // Auto-load mock on mount
-  useEffect(() => {
-    fetch(`${API}/pipeline/mock_results`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => { if (data?.frame_count) { setResults(data); setCurrentIdx(0); } })
-      .catch(() => {});
-  }, []);
+  // No auto-load — results are populated when the pipeline runs on a real session.
 
   // Auto-scroll log
   useEffect(() => {
@@ -163,16 +157,6 @@ export default function AlgorithmPanel() {
 
   useEffect(() => () => { if (playRef.current) clearInterval(playRef.current); }, []);
 
-  async function handleLoadMock() {
-    stopPlay();
-    fpCacheRef.current.clear();
-    try {
-      const r = await fetch(`${API}/pipeline/mock_results`);
-      const data = r.ok ? await r.json() : null;
-      if (data?.frame_count) { setResults(data); setCurrentIdx(0); setFramePair(null); }
-      else setToast('Failed to load mock results');
-    } catch { setToast('Cannot reach backend'); }
-  }
 
   function handleRun() {
     if (running) return;

@@ -1,10 +1,7 @@
 import asyncio
-import base64
-import io
 import json
 import math
 import os
-import random
 import time
 from pathlib import Path
 
@@ -106,119 +103,6 @@ def compute_sslf(frames: list[dict], gate: int = 10) -> None:
             f["seconds_since_last_fix"] = None
 
 
-# ─── Mock data generators ─────────────────────────────────────────────────────
-
-def generate_mock_results(session_name: str = "mock_session") -> dict:
-    n = 100
-    gate = 10
-    frames: list[dict] = []
-    lat, lon = _DEOLALI_LAT, _DEOLALI_LON
-    heading = 45.0
-    altitude = 80.0
-    start_ms = int(time.time() * 1000) - n * 300
-
-    for i in range(n):
-        ts_ms = start_ms + i * 300
-        lat += random.uniform(-0.00008, 0.00008)
-        lon += random.uniform(-0.00008, 0.00008)
-        heading = (heading + random.uniform(-5, 5)) % 360
-        altitude = round(max(60.0, min(100.0, altitude + random.uniform(-1.5, 1.5))), 1)
-
-        rr = random.choices(
-            [None, "blur", "uniform", "exposure"],
-            weights=[70, 20, 7, 3], k=1
-        )[0]
-
-        # Solver timing: total ~ lognormal median 120ms p90 ~280ms
-        total_ms = math.exp(random.gauss(math.log(120), 0.5))
-        embed_ms = random.uniform(12.0, 20.0)
-        faiss_ms = random.uniform(3.0, 8.0)
-        lightglue_ms = max(1.0, total_ms - embed_ms - faiss_ms)
-        solver_ms = {
-            "embed":      round(embed_ms, 1),
-            "faiss":      round(faiss_ms, 1),
-            "lightglue":  round(lightglue_ms, 1),
-            "total":      round(total_ms, 1),
-        }
-
-        if rr is not None:
-            inliers = random.randint(2, 8)
-            frames.append({
-                "timestamp_ms": ts_ms,
-                "lat": round(lat, 7), "lon": round(lon, 7),
-                "est_lat": None, "est_lon": None,
-                "position_error_m": None,
-                "retrieval_rank": None,
-                "inlier_count": inliers,
-                "confidence": round(min(1.0, inliers / 30), 3),
-                "camera_gsd_m_per_px": round(random.uniform(0.08, 0.12), 3),
-                "compass_hdg_deg": round(heading, 1),
-                "altitude_m": altitude,
-                "reject_reason": rr,
-                "solver_ms": solver_ms,
-                "seconds_since_last_fix": None,   # filled by compute_sslf below
-            })
-        else:
-            err = math.exp(random.gauss(math.log(22), 0.65))
-            angle = random.uniform(0, 2 * math.pi)
-            dlat = err / 111320.0
-            dlon = err / (111320.0 * math.cos(math.radians(lat)))
-            inliers = random.randint(5, 42)
-            frames.append({
-                "timestamp_ms": ts_ms,
-                "lat": round(lat, 7), "lon": round(lon, 7),
-                "est_lat": round(lat + dlat * math.cos(angle), 7),
-                "est_lon": round(lon + dlon * math.sin(angle), 7),
-                "position_error_m": round(err, 1),
-                "retrieval_rank": random.choices([1, 2, 3, 4, 5], weights=[60, 20, 10, 6, 4], k=1)[0],
-                "inlier_count": inliers,
-                "confidence": round(min(1.0, inliers / 30), 3),
-                "camera_gsd_m_per_px": round(random.uniform(0.08, 0.12), 3),
-                "compass_hdg_deg": round(heading, 1),
-                "altitude_m": altitude,
-                "reject_reason": None,
-                "solver_ms": solver_ms,
-                "seconds_since_last_fix": None,   # filled below
-            })
-
-    # Annotate seconds_since_last_fix in-place
-    compute_sslf(frames, gate=gate)
-
-    gps_track = [{"lat": f["lat"], "lon": f["lon"]} for f in frames]
-    est_track = [
-        {"lat": f["est_lat"], "lon": f["est_lon"]}
-        for f in frames if f["est_lat"] is not None
-    ]
-
-    result = {
-        "session_name": session_name,
-        "frame_count": n,
-        "frames": frames,
-        "gps_track": gps_track,
-        "est_track": est_track,
-        "benchmark": compute_benchmark(frames),
-    }
-    _pipeline_state["results"] = result
-    _pipeline_state["session_name"] = session_name
-    return result
-
-
-def _rand_jpeg_b64(w: int, h: int) -> str:
-    import numpy as np
-    from PIL import Image
-    arr = np.random.randint(20, 130, (h, w, 3), dtype=np.uint8)
-    buf = io.BytesIO()
-    Image.fromarray(arr, "RGB").save(buf, format="JPEG", quality=60)
-    return base64.b64encode(buf.getvalue()).decode()
-
-
-# ─── Endpoints ────────────────────────────────────────────────────────────────
-
-@router.get("/mock_results")
-async def get_mock_results():
-    data = _pipeline_state["results"]
-    return data if data is not None else generate_mock_results()
-
 
 @router.post("/run")
 async def run_pipeline(body: RunRequest):
@@ -280,8 +164,8 @@ async def get_frame_pair(session_name: str, timestamp_ms: int):
     if frame is None:
         raise HTTPException(status_code=404, detail="Frame not found")
     return {
-        "live_frame":              _rand_jpeg_b64(1280, 800),
-        "matched_tile":            _rand_jpeg_b64(512, 512),
+        "live_frame":              None,
+        "matched_tile":            None,
         "retrieval_rank":          frame.get("retrieval_rank"),
         "inlier_count":            frame.get("inlier_count"),
         "position_error_m":        frame.get("position_error_m"),

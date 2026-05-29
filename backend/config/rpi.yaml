@@ -16,9 +16,9 @@ hostname: 192.168.1.100
 username: pi
 key_path: ~/.ssh/drishti_rpi
 
-# Base directory on the RPi that holds session folders. The active session is
-# session_dir/<session_name>/timestamps.csv.
-session_dir: ~/drishti_sessions
+# Base directory that holds session/bag folders.
+# ~/bags for the Jetson Orin Nano (ROS2 bags recorded there).
+session_dir: ~/bags
 
 # Reconnect backoff ceiling (seconds). Backoff doubles 1 -> 2 -> 4 ... up to
 # this cap while the SSH link is down.

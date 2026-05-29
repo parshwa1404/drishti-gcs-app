@@ -52,6 +52,7 @@ export default function LiveMapPanel() {
     es.onmessage = (e) => {
       try {
         const fix = JSON.parse(e.data);
+        if (fix.lat == null || fix.lon == null) return; // no GPS yet
         setLatest(fix);
         setFixes((prev) => {
           const next = [...prev, fix];

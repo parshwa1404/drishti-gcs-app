@@ -84,9 +84,11 @@ function defaultSessionName() {
 const DISK_TOTAL_MB = 48_000;
 
 export default function LoggingPanel() {
-  const [host, setHost]         = useState('192.168.1.100');
+  const [host, setHost]         = useState('100.64.53.20');
   const [user, setUser]         = useState('pi');
+  const [authMode, setAuthMode] = useState('password'); // 'password' | 'key'
   const [keyPath, setKeyPath]   = useState('~/.ssh/id_rsa');
+  const [password, setPassword] = useState('');
   const [sessionName, setSession] = useState(defaultSessionName);
   const [altitude, setAltitude] = useState(80);
 
@@ -97,6 +99,19 @@ export default function LoggingPanel() {
 
   const [status, setStatus] = useState(null);
   const sseRef = useRef(null);
+
+  // Restore connection state when panel remounts after a tab switch
+  useEffect(() => {
+    fetch(`${API}/logger/state`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.connected) {
+          setConnected(true);
+          if (data.host) setHost(data.host);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const es = new EventSource(`${API}/logger/status`);
@@ -115,7 +130,12 @@ export default function LoggingPanel() {
       const res = await fetch(`${API}/logger/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, user, key_path: keyPath }),
+        body: JSON.stringify({
+          host,
+          user,
+          key_path: authMode === 'key' ? keyPath : '',
+          password: authMode === 'password' ? password : '',
+        }),
       });
       if (res.ok) {
         setConnected(true);
@@ -170,23 +190,64 @@ export default function LoggingPanel() {
           RPi Connection
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[
-            { label: 'Host IP',      value: host,    set: setHost,    placeholder: '192.168.x.x' },
-            { label: 'Username',     value: user,    set: setUser,    placeholder: 'pi' },
-            { label: 'SSH Key Path', value: keyPath, set: setKeyPath, placeholder: '~/.ssh/id_rsa' },
-          ].map(({ label, value, set, placeholder }) => (
-            <div key={label}>
-              <label className="text-xs text-gray-400 block mb-1">{label}</label>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Host IP</label>
+            <input
+              className="w-full bg-gray-700 rounded px-3 py-2 text-sm text-white font-mono
+                         focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+              value={host}
+              placeholder="192.168.x.x"
+              onChange={(e) => setHost(e.target.value)}
+              disabled={connected}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Username</label>
+            <input
+              className="w-full bg-gray-700 rounded px-3 py-2 text-sm text-white font-mono
+                         focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+              value={user}
+              placeholder="pi"
+              onChange={(e) => setUser(e.target.value)}
+              disabled={connected}
+            />
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs text-gray-400">
+                {authMode === 'key' ? 'SSH Key Path' : 'Password'}
+              </label>
+              {!connected && (
+                <button
+                  type="button"
+                  onClick={() => setAuthMode(m => m === 'key' ? 'password' : 'key')}
+                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  use {authMode === 'key' ? 'password' : 'key'} instead
+                </button>
+              )}
+            </div>
+            {authMode === 'key' ? (
               <input
                 className="w-full bg-gray-700 rounded px-3 py-2 text-sm text-white font-mono
                            focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
-                value={value}
-                placeholder={placeholder}
-                onChange={(e) => set(e.target.value)}
+                value={keyPath}
+                placeholder="~/.ssh/id_rsa"
+                onChange={(e) => setKeyPath(e.target.value)}
                 disabled={connected}
               />
-            </div>
-          ))}
+            ) : (
+              <input
+                type="password"
+                className="w-full bg-gray-700 rounded px-3 py-2 text-sm text-white font-mono
+                           focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+                value={password}
+                placeholder="password"
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={connected}
+              />
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-4">
           <button

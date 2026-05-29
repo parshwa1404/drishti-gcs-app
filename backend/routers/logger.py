@@ -1,10 +1,13 @@
 import asyncio
 import json
 import random
+import shlex
 import threading
 import time
+from datetime import datetime, timezone
 
 import paramiko
+import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -25,7 +28,8 @@ _DEOLALI_LON = 73.8278
 class ConnectRequest(BaseModel):
     host: str
     user: str
-    key_path: str
+    key_path: str = ''
+    password: str = ''
 
 
 class StartRequest(BaseModel):
@@ -39,10 +43,9 @@ _state = {
     "connected": False,
     "running": False,
     "host": None,
-    # GPS position mirrored from the live tail (or random-walked in dev so the
-    # Live Map keeps animating without a real RPi).
-    "lat": _DEOLALI_LAT,
-    "lon": _DEOLALI_LON,
+    # GPS position mirrored from the live tail; None until first real fix arrives.
+    "lat": None,
+    "lon": None,
     "client": None,          # RpiSshClient once connected to a real RPi
     "creds": None,           # kwargs to rebuild the client after a stop
     "tail_thread": None,
@@ -112,10 +115,15 @@ def _reset_live() -> None:
 
 def _build_client(creds: dict) -> RpiSshClient:
     cfg = _state.get("config") or {}
+    password = creds.get("password") or None
+    # Don't fall back to the yaml key_path when the user supplies a password —
+    # they have explicitly chosen password auth.
+    key_path = creds.get("key_path") or ('' if password else cfg.get("key_path", ""))
     return RpiSshClient(
         hostname=creds["host"] or cfg.get("hostname", ""),
         username=creds["user"] or cfg.get("username", "pi"),
-        key_path=creds["key_path"] or cfg.get("key_path", ""),
+        key_path=key_path,
+        password=password,
         session_dir=cfg.get("session_dir", "~/drishti_sessions"),
         reconnect_max_backoff_s=cfg.get("reconnect_max_backoff_s", 30),
     )
@@ -142,7 +150,7 @@ def _live_payload(snap: dict, connection_status: str) -> dict:
 @router.post("/connect")
 async def connect(body: ConnectRequest):
     _state["config"] = load_rpi_config()
-    creds = {"host": body.host, "user": body.user, "key_path": body.key_path}
+    creds = {"host": body.host, "user": body.user, "key_path": body.key_path, "password": body.password}
     client = _build_client(creds)
     try:
         await asyncio.to_thread(client.connect)
@@ -233,10 +241,6 @@ async def preflight(fail_demo: bool = False):
 @router.get("/status")
 async def status():
     async def event_generator():
-        # Dev/idle fallback state — keeps the Live Map animating without a real RPi.
-        disk_mb = 48_000
-        heading = 45.0
-
         while True:
             client = _state.get("client")
             if _state["running"] and client is not None:
@@ -244,25 +248,107 @@ async def status():
                     snap = dict(_live)
                 payload = _live_payload(snap, client.connection_status)
             else:
-                # GPS random walk so logger_state (→ /session/live, Panel 2) keeps moving.
-                _state["lat"] += random.uniform(-0.00005, 0.00005)
-                _state["lon"] += random.uniform(-0.00005, 0.00005)
-                heading = (heading + random.uniform(-5.0, 5.0)) % 360.0
                 conn = client.connection_status if (client is not None and client.is_connected) else None
                 payload = {
                     "frames_captured": 0,
-                    "gps_quality": round(random.uniform(1.8, 2.8), 2),
-                    "heading_deg": round(heading, 1),
-                    "disk_mb_remaining": disk_mb,
-                    "fix_count": random.randint(4, 7),
-                    "lat": round(_state["lat"], 7),
-                    "lon": round(_state["lon"], 7),
-                    "altitude_m": None,
-                    "unix_ms": None,
-                    "timestamp_ms": int(time.time() * 1000),
+                    "gps_quality":      None,
+                    "heading_deg":      None,
+                    "disk_mb_remaining": None,
+                    "fix_count":        None,
+                    "lat":              None,
+                    "lon":              None,
+                    "altitude_m":       None,
+                    "unix_ms":          None,
+                    "timestamp_ms":     int(time.time() * 1000),
                     "connection_status": conn,
                 }
             yield {"data": json.dumps(payload)}
             await asyncio.sleep(1.0)
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/state")
+async def state():
+    """Current SSH connection state — used by panels to restore UI on mount."""
+    client = _state.get("client")
+    conn_status = client.connection_status if client is not None else None
+    return {
+        "connected": _state["connected"],
+        "host":      _state["host"],
+        "running":   _state["running"],
+        "connection_status": conn_status,
+    }
+
+
+def _parse_bag_meta(client, bag_path: str) -> dict:
+    """Read metadata.yaml from a ROS2 bag dir and return display-friendly fields."""
+    # Check whether the actual .db3 data file exists (metadata.yaml can exist alone
+    # when a recording was started but the data was never written).
+    _, stdout, _ = client._client.exec_command(
+        f"find {shlex.quote(bag_path)} -maxdepth 1 -name '*.db3' 2>/dev/null | head -1"
+    )
+    has_data = bool(stdout.read().decode().strip())
+
+    _, stdout, _ = client._client.exec_command(
+        f"cat {shlex.quote(bag_path + '/metadata.yaml')} 2>/dev/null"
+    )
+    raw = stdout.read().decode("utf-8", errors="replace")
+    if not raw.strip():
+        return {"has_data": has_data}
+    try:
+        meta = yaml.safe_load(raw) or {}
+        bag_info = meta.get("rosbag2_bagfile_information", {})
+        duration_ns = bag_info.get("duration", {}).get("nanoseconds", 0)
+        start_ns    = bag_info.get("starting_time", {}).get("nanoseconds_since_epoch", 0)
+        message_count = bag_info.get("message_count", 0)
+        topics = {
+            t["topic_metadata"]["name"]: t["message_count"]
+            for t in bag_info.get("topics_with_message_count", [])
+        }
+        frame_count = topics.get("/camera/color/image_raw", 0)
+        gps_count   = topics.get("/mavros/global_position/raw/fix", 0)
+        start_time  = ""
+        if start_ns:
+            start_ms = start_ns // 1_000_000
+            start_time = datetime.fromtimestamp(
+                start_ms / 1000.0, tz=timezone.utc
+            ).strftime("%Y-%m-%d %H:%M:%S UTC")
+        return {
+            "has_data":      has_data,
+            "duration_s":    round(duration_ns / 1e9, 1) if duration_ns else 0,
+            "frame_count":   frame_count,
+            "gps_count":     gps_count,
+            "message_count": message_count,
+            "start_time":    start_time,
+            "topics":        topics,
+        }
+    except Exception:
+        return {"has_data": has_data}
+
+
+@router.get("/sessions")
+async def list_sessions():
+    """List session/bag directories in the remote session_dir, with metadata."""
+    client = _state.get("client")
+    if client is None or not client.is_connected:
+        raise HTTPException(status_code=409, detail="not connected — connect in the Logging panel first")
+    cfg = _state.get("config") or {}
+    base = cfg.get("session_dir", "~/bags")
+
+    # Expand ~ on the remote side (shlex.quote prevents tilde expansion)
+    _, stdout, _ = client._client.exec_command(f"echo {base}")
+    abs_base = stdout.read().decode("utf-8", errors="replace").strip() or base
+
+    _, stdout, _ = client._client.exec_command(
+        f"find {shlex.quote(abs_base)} -maxdepth 1 -mindepth 1 -type d 2>/dev/null; true"
+    )
+    raw = stdout.read().decode("utf-8", errors="replace").strip()
+    paths = sorted(line for line in raw.splitlines() if line.strip())
+
+    sessions = []
+    for p in paths:
+        meta = _parse_bag_meta(client, p)
+        sessions.append({"path": p, "name": p.rsplit("/", 1)[-1], **meta})
+
+    return {"sessions": sessions, "base_dir": abs_base}

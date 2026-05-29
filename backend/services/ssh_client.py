@@ -15,6 +15,7 @@ import os
 import shlex
 import threading
 from pathlib import Path
+from stat import S_ISDIR as _S_ISDIR
 
 import paramiko
 import yaml
@@ -64,6 +65,19 @@ def _default_ssh_factory() -> paramiko.SSHClient:
     return client
 
 
+def _sftp_get_recursive(sftp, remote_path: str, local_path: str) -> None:
+    """Recursively download remote_path into local_path via an open SFTP channel."""
+    local = Path(local_path)
+    local.mkdir(parents=True, exist_ok=True)
+    for entry in sftp.listdir_attr(remote_path):
+        r_item = f"{remote_path.rstrip('/')}/{entry.filename}"
+        l_item = local / entry.filename
+        if _S_ISDIR(entry.st_mode):
+            _sftp_get_recursive(sftp, r_item, str(l_item))
+        else:
+            sftp.get(r_item, str(l_item))
+
+
 class RpiSshClient:
     """Persistent SSH tail of the RPi logger's per-frame timestamps.csv."""
 
@@ -71,8 +85,9 @@ class RpiSshClient:
         self,
         hostname: str,
         username: str,
-        key_path: str,
-        session_dir: str,
+        key_path: str = '',
+        password: str | None = None,
+        session_dir: str = '~/drishti_sessions',
         reconnect_max_backoff_s: float = 30,
         connect_timeout_s: float = 10,
         poll_interval_s: float = 2.0,
@@ -82,6 +97,7 @@ class RpiSshClient:
         self.hostname = hostname
         self.username = username
         self.key_path = key_path
+        self.password = password
         # Full per-session directory: <base>/<session_name>. timestamps.csv lives here.
         self.session_dir = session_dir
         self.reconnect_max_backoff_s = reconnect_max_backoff_s
@@ -110,12 +126,19 @@ class RpiSshClient:
         """Open the SSH connection. Raises paramiko/OSError on failure."""
         client = self._ssh_factory()
         key_filename = os.path.expanduser(self.key_path) if self.key_path else None
-        client.connect(
-            hostname=self.hostname,
-            username=self.username,
-            key_filename=key_filename,
-            timeout=self.connect_timeout_s,
-        )
+
+        kwargs: dict = dict(hostname=self.hostname, username=self.username, timeout=self.connect_timeout_s)
+        if key_filename:
+            kwargs['key_filename'] = key_filename
+            kwargs['look_for_keys'] = False
+            kwargs['allow_agent'] = False
+        elif self.password:
+            kwargs['password'] = self.password
+            kwargs['look_for_keys'] = False
+            kwargs['allow_agent'] = False
+        # else: default paramiko key discovery (agent + ~/.ssh)
+
+        client.connect(**kwargs)
         self._client = client
         self._connected = True
         self.connection_status = STATUS_CONNECTED
@@ -132,6 +155,23 @@ class RpiSshClient:
             except OSError:
                 pass
             self._client = None
+
+    # ─── SFTP ────────────────────────────────────────────────────────────────
+
+    def download_session_dir(self, remote_dir: str, local_dir: str) -> None:
+        """Download remote_dir (and all subdirs/files) to local_dir via SFTP.
+
+        Expands ~ on the remote side first because SFTP doesn't run a shell.
+        """
+        # Expand ~ on the remote side (shlex.quote prevents shell tilde expansion).
+        _, stdout, _ = self._client.exec_command(f"echo {remote_dir}")
+        actual_remote = stdout.read().decode("utf-8", errors="replace").strip() or remote_dir
+
+        sftp = self._client.open_sftp()
+        try:
+            _sftp_get_recursive(sftp, actual_remote, local_dir)
+        finally:
+            sftp.close()
 
     # ─── tailing ─────────────────────────────────────────────────────────────
 

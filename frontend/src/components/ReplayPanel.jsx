@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { MapContainer, TileLayer, Polyline, CircleMarker, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -21,17 +22,14 @@ function fmtCoord(v, pos, neg) {
   return `${Math.abs(v).toFixed(6)}° ${v >= 0 ? pos : neg}`;
 }
 
-// ─── Map controller: fitBounds on first load, panTo on subsequent moves ─────
+// ─── Map controller ─────────────────────────────────────────────────────────
 function MapController({ gpsTrack, currentPos }) {
   const map = useMap();
   const fitted = useRef(false);
 
   useEffect(() => {
     if (gpsTrack.length > 1 && !fitted.current) {
-      map.fitBounds(
-        gpsTrack.map((p) => [p.lat, p.lon]),
-        { padding: [40, 40] }
-      );
+      map.fitBounds(gpsTrack.map((p) => [p.lat, p.lon]), { padding: [40, 40] });
       fitted.current = true;
     }
   }, [gpsTrack, map]);
@@ -45,7 +43,7 @@ function MapController({ gpsTrack, currentPos }) {
   return null;
 }
 
-// ─── Toast ───────────────────────────────────────────────────────────────────
+// ─── Toast ──────────────────────────────────────────────────────────────────
 function Toast({ message, onDismiss }) {
   useEffect(() => {
     const t = setTimeout(onDismiss, 4000);
@@ -62,32 +60,19 @@ function Toast({ message, onDismiss }) {
 }
 
 // ─── Quick Verify card ───────────────────────────────────────────────────────
-
 function QuickVerifyCard({ verify, onDismiss }) {
   const isGood = verify.verdict === 'GOOD';
   return (
     <div className={`shrink-0 border-b ${isGood ? 'border-green-800 bg-green-950/40' : 'border-red-800 bg-red-950/40'} px-4 py-3`}>
       <div className="flex items-start gap-4">
-        {/* Verdict badge */}
         <div className={`shrink-0 px-4 py-2 rounded-lg font-bold text-lg tracking-widest
                          ${isGood ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>
           {isGood ? 'GOOD' : 'RE-FLY'}
         </div>
-
-        {/* Stats */}
         <div className="flex-1 grid grid-cols-2 gap-x-8 gap-y-0.5 text-xs">
-          <div className="flex gap-2 text-gray-400">
-            <span>Frames:</span>
-            <span className="text-gray-200 font-mono">{verify.frame_count}</span>
-          </div>
-          <div className="flex gap-2 text-gray-400">
-            <span>Duration:</span>
-            <span className="text-gray-200 font-mono">{verify.duration_s} s</span>
-          </div>
-          <div className="flex gap-2 text-gray-400">
-            <span>GPS pts:</span>
-            <span className="text-gray-200 font-mono">{verify.gps_track_points}</span>
-          </div>
+          <div className="flex gap-2 text-gray-400"><span>Frames:</span><span className="text-gray-200 font-mono">{verify.frame_count}</span></div>
+          <div className="flex gap-2 text-gray-400"><span>Duration:</span><span className="text-gray-200 font-mono">{verify.duration_s} s</span></div>
+          <div className="flex gap-2 text-gray-400"><span>GPS pts:</span><span className="text-gray-200 font-mono">{verify.gps_track_points}</span></div>
           <div className="flex gap-2 text-gray-400">
             <span>HDOP (median):</span>
             <span className={`font-mono font-semibold ${verify.gps_fix_quality.hdop_median <= 1.5 ? 'text-green-400' : 'text-amber-400'}`}>
@@ -107,23 +92,191 @@ function QuickVerifyCard({ verify, onDismiss }) {
             </span>
           </div>
         </div>
-
-        {/* Dismiss */}
-        <button
-          onClick={onDismiss}
-          className="shrink-0 text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded"
-        >
+        <button onClick={onDismiss} className="shrink-0 text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded">
           Dismiss
         </button>
       </div>
-
-      {/* RE-FLY reasons */}
       {!isGood && verify.refly_reasons.length > 0 && (
         <ul className="mt-2 ml-[120px] space-y-0.5 text-xs text-red-300 list-disc list-inside">
           {verify.refly_reasons.map((r, i) => <li key={i}>{r}</li>)}
         </ul>
       )}
     </div>
+  );
+}
+
+// ─── Bag dropdown (portal — renders above Leaflet z-stack) ───────────────────
+function BagDropdown({ onSelect, disabled }) {
+  const [open, setOpen]           = useState(false);
+  const [bags, setBags]           = useState(null);
+  const [loading, setLoading]     = useState(false);
+  const [baseDir, setBaseDir]     = useState('~/bags');
+  const [editingBase, setEditingBase] = useState(false);
+  const [hovered, setHovered]     = useState(null);
+  const [menuPos, setMenuPos]     = useState({ top: 0, right: 0 });
+  const btnRef                    = useRef(null);
+  const menuRef                   = useRef(null);
+
+  // Position the portal menu below the button
+  useEffect(() => {
+    if (open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    }
+  }, [open]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const h = (e) => {
+      if (
+        btnRef.current && !btnRef.current.contains(e.target) &&
+        menuRef.current && !menuRef.current.contains(e.target)
+      ) setOpen(false);
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
+
+  async function fetchBags() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/logger/sessions`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setBags({ error: err.detail || 'Failed — is Jetson connected?' });
+        return;
+      }
+      const data = await res.json();
+      setBaseDir(data.base_dir || baseDir);
+      setBags(data.sessions);
+    } catch {
+      setBags({ error: 'Cannot reach backend' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && bags === null) fetchBags();
+  }
+
+  const menu = open && createPortal(
+    <div
+      ref={menuRef}
+      style={{ position: 'fixed', top: menuPos.top, right: menuPos.right, zIndex: 9999 }}
+      className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[400px]"
+    >
+      {/* Base dir header */}
+      <div className="px-4 py-2.5 border-b border-gray-700 flex items-center gap-2">
+        <span className="text-xs text-gray-500 shrink-0">Bags dir:</span>
+        {editingBase ? (
+          <input
+            autoFocus
+            className="flex-1 bg-gray-800 text-xs font-mono text-gray-200 px-2 py-1
+                       rounded focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            value={baseDir}
+            onChange={(e) => setBaseDir(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { setEditingBase(false); setBags(null); fetchBags(); }
+              if (e.key === 'Escape') setEditingBase(false);
+            }}
+            onBlur={() => setEditingBase(false)}
+          />
+        ) : (
+          <button
+            className="flex-1 text-left text-xs font-mono text-gray-300 hover:text-white truncate"
+            onClick={() => setEditingBase(true)}
+          >
+            {baseDir}
+          </button>
+        )}
+        <button
+          onClick={() => { setBags(null); fetchBags(); }}
+          className="shrink-0 text-xs text-blue-400 hover:text-blue-300 px-1"
+          title="Refresh"
+        >↻</button>
+      </div>
+
+      {/* Bag list */}
+      <div className="max-h-80 overflow-y-auto">
+        {loading ? (
+          <div className="px-4 py-4 text-sm text-gray-500 animate-pulse">Loading bags…</div>
+        ) : !bags ? null
+          : bags.error ? (
+          <div className="px-4 py-4 text-sm text-red-400">{bags.error}</div>
+        ) : bags.length === 0 ? (
+          <div className="px-4 py-4 text-sm text-gray-500">
+            No bags found in <span className="font-mono">{baseDir}</span>.
+          </div>
+        ) : bags.map((bag) => (
+          <div
+            key={bag.path}
+            onMouseEnter={() => setHovered(bag.path)}
+            onMouseLeave={() => setHovered(null)}
+            onClick={() => {
+              if (bag.has_data === false) return;
+              onSelect(bag.path);
+              setOpen(false);
+            }}
+            className={`px-4 py-3 border-b border-gray-800 last:border-0 transition-colors
+                        ${bag.has_data === false
+                          ? 'opacity-40 cursor-not-allowed'
+                          : 'hover:bg-gray-800 cursor-pointer'}`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-mono text-gray-200">{bag.name}</span>
+              <div className="flex items-center gap-2">
+                {bag.has_data === false && (
+                  <span className="text-xs text-red-500 font-medium">incomplete</span>
+                )}
+                {bag.frame_count > 0 && (
+                  <span className="text-xs text-gray-500">{bag.duration_s}s · {bag.frame_count} frames</span>
+                )}
+              </div>
+            </div>
+            {bag.frame_count > 0 ? (
+              <div className="text-xs text-gray-500 mt-0.5">
+                {bag.gps_count} GPS fixes · {bag.message_count} messages total
+              </div>
+            ) : (
+              <div className="text-xs text-amber-600 mt-0.5">No image data found</div>
+            )}
+            {hovered === bag.path && (
+              <div className="mt-2 pt-2 border-t border-gray-700 text-xs text-gray-400 space-y-0.5">
+                {bag.start_time && (
+                  <div><span className="text-gray-600">Start: </span>{bag.start_time}</div>
+                )}
+                {bag.topics && Object.entries(bag.topics).map(([topic, count]) => (
+                  <div key={topic} className="flex justify-between">
+                    <span className="font-mono truncate text-gray-500" style={{ maxWidth: '75%' }}>{topic}</span>
+                    <span className="tabular-nums">{count} msgs</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>,
+    document.body
+  );
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        onClick={toggle}
+        disabled={disabled}
+        className={`px-4 py-2 rounded text-sm font-semibold text-white transition-colors disabled:opacity-40
+                    ${open ? 'bg-indigo-800 hover:bg-indigo-700' : 'bg-indigo-600 hover:bg-indigo-500'}`}
+      >
+        {disabled ? 'Downloading…' : open ? 'Bags ✕' : 'Select Bag ▾'}
+      </button>
+      {menu}
+    </>
   );
 }
 
@@ -135,9 +288,12 @@ export default function ReplayPanel() {
   const [currentIdx, setCurrentIdx]     = useState(0);
   const [playing, setPlaying]           = useState(false);
   const [toast, setToast]               = useState('');
-  const [imgError, setImgError]         = useState(false);
+  // Per-frame error: {idx, hasError}. showError only when idx matches currentIdx.
+  const [frameError, setFrameError]     = useState({ idx: -1, hasError: false });
   const [verify, setVerify]             = useState(null);
   const [verifyDismissed, setVerifyDismissed] = useState(false);
+  const [fetchingRemote, setFetchingRemote]   = useState(false);
+
   const playRef = useRef(null);
   const imgRef  = useRef(null);
 
@@ -150,20 +306,7 @@ export default function ReplayPanel() {
       .catch(() => {});
   }
 
-  // Auto-load mock on mount
-  useEffect(() => {
-    fetch(`${API}/session/mock`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data?.frame_count) {
-          setSessionData(data);
-          setSessionDir('[mock session]');
-          setCurrentIdx(0);
-          fetchVerify(data.session_name);
-        }
-      })
-      .catch(() => {});
-  }, []);
+  // No mock auto-load — start empty, user selects a real bag.
 
   // Keyboard nav
   useEffect(() => {
@@ -183,10 +326,7 @@ export default function ReplayPanel() {
 
   // Playback
   const stopPlay = useCallback(() => {
-    if (playRef.current) {
-      clearInterval(playRef.current);
-      playRef.current = null;
-    }
+    if (playRef.current) { clearInterval(playRef.current); playRef.current = null; }
     setPlaying(false);
   }, []);
 
@@ -194,10 +334,7 @@ export default function ReplayPanel() {
     if (playRef.current || !sessionData) return;
     playRef.current = setInterval(() => {
       setCurrentIdx((i) => {
-        if (i >= sessionData.frame_count - 1) {
-          stopPlay();
-          return i;
-        }
+        if (i >= sessionData.frame_count - 1) { stopPlay(); return i; }
         return i + 1;
       });
     }, 100);
@@ -216,16 +353,9 @@ export default function ReplayPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_dir: sessionDir }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        setToast(err.detail || 'Failed to load session');
-        return;
-      }
+      if (!res.ok) { setToast((await res.json().catch(() => ({}))).detail || 'Failed to load session'); return; }
       const data = await res.json();
-      if (!data.frame_count) {
-        setToast('No frames found in session');
-        return;
-      }
+      if (!data.frame_count) { setToast('No frames found in session'); return; }
       setSessionData(data);
       setCurrentIdx(0);
       fetchVerify(data.session_name);
@@ -236,27 +366,31 @@ export default function ReplayPanel() {
     }
   }
 
-  async function handleLoadMock() {
-    setLoading(true);
+  async function handleFetchRemote(remotePath) {
+    setFetchingRemote(true);
     stopPlay();
     try {
-      const res = await fetch(`${API}/session/mock`);
-      if (!res.ok) { setToast('Mock session not available'); return; }
+      const res = await fetch(`${API}/session/fetch-remote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remote_path: remotePath }),
+      });
+      if (!res.ok) { setToast((await res.json().catch(() => ({}))).detail || 'Failed to fetch remote session'); return; }
       const data = await res.json();
+      if (!data.frame_count) { setToast('No frames found in session'); return; }
       setSessionData(data);
-      setSessionDir('[mock session]');
       setCurrentIdx(0);
       fetchVerify(data.session_name);
     } catch {
       setToast('Cannot reach backend');
     } finally {
-      setLoading(false);
+      setFetchingRemote(false);
     }
   }
 
-  const frame     = sessionData?.frames?.[currentIdx];
-  const gpsTrack  = sessionData?.gps_track ?? [];
-  const trackLine = gpsTrack.map((p) => [p.lat, p.lon]);
+  const frame      = sessionData?.frames?.[currentIdx];
+  const gpsTrack   = sessionData?.gps_track ?? [];
+  const trackLine  = gpsTrack.map((p) => [p.lat, p.lon]);
   const currentPos = frame?.lat != null ? { lat: frame.lat, lon: frame.lon } : null;
 
   return (
@@ -265,9 +399,9 @@ export default function ReplayPanel() {
       {/* ── Top bar ── */}
       <div className="shrink-0 bg-gray-950 border-b border-gray-800 px-4 py-3 flex items-center gap-3 flex-wrap">
         <input
-          className="flex-1 min-w-[260px] bg-gray-700 rounded px-3 py-2 text-sm
+          className="flex-1 min-w-[220px] bg-gray-700 rounded px-3 py-2 text-sm
                      font-mono text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-          placeholder="/path/to/session_dir"
+          placeholder="/path/to/local/session"
           value={sessionDir === '[mock session]' ? '' : sessionDir}
           onChange={(e) => setSessionDir(e.target.value)}
         />
@@ -279,16 +413,15 @@ export default function ReplayPanel() {
         >
           {loading ? 'Loading…' : 'Load'}
         </button>
-        <button
-          onClick={handleLoadMock}
-          disabled={loading}
-          className="px-4 py-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-40
-                     rounded text-sm font-semibold text-white transition-colors"
-        >
-          Load Mock
-        </button>
+        {/* Jetson bag dropdown */}
+        <BagDropdown onSelect={handleFetchRemote} disabled={fetchingRemote} />
+
+        {fetchingRemote && (
+          <span className="text-xs text-indigo-400 animate-pulse">Downloading from Jetson…</span>
+        )}
+
         {sessionData && (
-          <span className="text-sm text-gray-400 font-mono whitespace-nowrap">
+          <span className="text-sm text-gray-400 font-mono whitespace-nowrap ml-auto">
             {sessionData.frame_count} frames · {sessionData.duration_s}s ·{' '}
             <span className="text-gray-300">{sessionData.session_name}</span>
           </span>
@@ -316,11 +449,7 @@ export default function ReplayPanel() {
             min={0}
             max={sessionData.frame_count - 1}
             value={currentIdx}
-            onChange={(e) => {
-              stopPlay();
-              setCurrentIdx(Number(e.target.value));
-              setImgError(false);
-            }}
+            onChange={(e) => { stopPlay(); setCurrentIdx(Number(e.target.value)); }}
             className="flex-1 accent-blue-500"
           />
           <span className="text-xs font-mono text-gray-400 tabular-nums w-20 text-right">
@@ -332,7 +461,9 @@ export default function ReplayPanel() {
       {/* ── Main content ── */}
       {!sessionData ? (
         <div className="flex-1 flex items-center justify-center text-gray-600 text-base">
-          Load a session or click <span className="mx-1.5 px-2 py-0.5 bg-gray-800 rounded text-gray-400 font-mono text-sm">Load Mock</span> to begin
+          Connect to the Jetson and click{' '}
+          <span className="mx-1.5 px-2 py-0.5 bg-gray-800 rounded text-indigo-400 font-semibold text-sm">Select Bag ▾</span>
+          to load a flight recording
         </div>
       ) : (
         <div className="flex-1 flex overflow-hidden">
@@ -340,7 +471,7 @@ export default function ReplayPanel() {
           {/* Left — frame + metadata (55%) */}
           <div className="flex flex-col w-[55%] overflow-y-auto border-r border-gray-800">
             <div className="flex-1 bg-black flex items-center justify-center min-h-[300px]">
-              {imgError ? (
+              {frameError.hasError && frameError.idx === currentIdx ? (
                 <div className="text-gray-600 text-sm flex flex-col items-center gap-2">
                   <div className="w-16 h-16 bg-gray-800 rounded flex items-center justify-center text-3xl">?</div>
                   Frame unavailable
@@ -348,12 +479,11 @@ export default function ReplayPanel() {
               ) : frame ? (
                 <img
                   ref={imgRef}
-                  key={frame.timestamp_ms}
                   src={`${API}/session/frame/${frame.timestamp_ms}`}
                   alt={`Frame ${currentIdx}`}
                   className="max-w-full max-h-full object-contain"
-                  onError={() => setImgError(true)}
-                  onLoad={() => setImgError(false)}
+                  onError={() => setFrameError({ idx: currentIdx, hasError: true })}
+                  onLoad={() => setFrameError({ idx: currentIdx, hasError: false })}
                 />
               ) : null}
             </div>
@@ -396,29 +526,19 @@ export default function ReplayPanel() {
                 attribution={ESRI_IMAGERY.attribution}
                 maxZoom={ESRI_IMAGERY.maxZoom}
               />
-
-              {/* Full GPS track in grey */}
               {trackLine.length > 1 && (
                 <Polyline
                   positions={trackLine}
                   pathOptions={{ color: '#9ca3af', weight: 2, opacity: 0.7 }}
                 />
               )}
-
-              {/* Current position marker */}
               {currentPos && (
                 <CircleMarker
                   center={[currentPos.lat, currentPos.lon]}
                   radius={8}
-                  pathOptions={{
-                    color: '#3b82f6',
-                    fillColor: '#3b82f6',
-                    fillOpacity: 0.9,
-                    weight: 2,
-                  }}
+                  pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.9, weight: 2 }}
                 />
               )}
-
               <MapController gpsTrack={gpsTrack} currentPos={currentPos} />
             </MapContainer>
           </div>

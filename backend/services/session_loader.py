@@ -33,6 +33,7 @@ def load_session(session_dir: str) -> dict:
     nmea_path = root / "gps.nmea"
     gps_fixes = parse_nmea_file(str(nmea_path)) if nmea_path.exists() else []
 
+    # Preliminary gps_track from nmea; will be replaced by csv data if available.
     gps_track = [{"lat": f["lat"], "lon": f["lon"]} for f in gps_fixes]
 
     frames = []
@@ -64,14 +65,34 @@ def load_session(session_dir: str) -> dict:
                 "frame_path": f"frames/{ts_ms}.jpg",
             })
 
-    # Per-frame altitude from timestamps.csv when the logger wrote one.
+    # Per-frame GPS fields from timestamps.csv (ms-precision, overrides gps.nmea matching).
     ts_path = root / "timestamps.csv"
     if ts_path.exists():
-        alt_by_ts = {r["unix_ms"]: r["altitude_m"] for r in read_timestamps_csv(str(ts_path))}
+        csv_by_ts = {r["unix_ms"]: r for r in read_timestamps_csv(str(ts_path))}
         for f in frames:
-            alt = alt_by_ts.get(f["timestamp_ms"])
-            if alt is not None:
-                f["altitude_m"] = alt
+            rec = csv_by_ts.get(f["timestamp_ms"])
+            if rec is None:
+                continue
+            if rec.get("altitude_m") is not None:
+                f["altitude_m"] = rec["altitude_m"]
+            # Prefer CSV lat/lon when available (ms-precision vs gps.nmea's 1-second resolution)
+            try:
+                if rec.get("lat") is not None and rec.get("lon") is not None:
+                    f["lat"] = rec["lat"]
+                    f["lon"] = rec["lon"]
+                if rec.get("heading_deg") is not None:
+                    f["heading_deg"] = rec["heading_deg"]
+            except (TypeError, ValueError):
+                pass
+
+    # Rebuild gps_track from frames after CSV enrichment (more points, ms-precise).
+    csv_track = [
+        {"lat": f["lat"], "lon": f["lon"]}
+        for f in frames
+        if f.get("lat") is not None and f.get("lon") is not None
+    ]
+    if csv_track:
+        gps_track = csv_track
 
     duration_s = 0.0
     if len(frame_timestamps) > 1:

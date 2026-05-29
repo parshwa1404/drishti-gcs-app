@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import LoggingPanel from './components/LoggingPanel';
 import LiveMapPanel from './components/LiveMapPanel';
 import ReplayPanel from './components/ReplayPanel';
@@ -6,6 +6,8 @@ import AlgorithmPanel from './components/AlgorithmPanel';
 import BenchmarkPanel from './components/BenchmarkPanel';
 import ChecklistPanel from './components/ChecklistPanel';
 import LiveFeedPanel from './components/LiveFeedPanel';
+
+const API = 'http://localhost:8000';
 
 const PANELS = [
   { id: 'logging',   label: 'Logging' },
@@ -27,8 +29,41 @@ const PANEL_COMPONENTS = {
   'live-feed': <LiveFeedPanel />,
 };
 
+function ConnectionBadge({ conn }) {
+  if (!conn) return null;
+  if (conn.connected) {
+    return (
+      <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-950/60
+                        border border-green-800 text-xs font-semibold text-green-400">
+        <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+        {conn.host}
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-800/60
+                      border border-gray-700 text-xs font-semibold text-gray-500">
+      <span className="w-1.5 h-1.5 rounded-full bg-gray-600" />
+      not connected
+    </span>
+  );
+}
+
 export default function App() {
   const [active, setActive] = useState('logging');
+  const [conn, setConn] = useState(null);
+
+  useEffect(() => {
+    const check = () => {
+      fetch(`${API}/logger/state`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => setConn(data))
+        .catch(() => {});
+    };
+    check();
+    const id = setInterval(check, 3000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 flex flex-col">
@@ -54,6 +89,9 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <div className="ml-auto">
+          <ConnectionBadge conn={conn} />
+        </div>
       </header>
 
       <main className="flex-1 overflow-auto">

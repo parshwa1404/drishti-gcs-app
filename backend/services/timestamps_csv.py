@@ -33,18 +33,23 @@ def parse_timestamps_line(line: str) -> dict | None:
     if len(parts) < _N_COLUMNS:
         return None
 
+    def _f(s: str):
+        s = s.strip()
+        return float(s) if s else None
+
     try:
-        return {
-            "unix_ms": int(parts[0]),
-            "frame_path": parts[1].strip(),
-            "lat": float(parts[2]),
-            "lon": float(parts[3]),
-            "altitude_m": float(parts[4]),
-            "heading_deg": float(parts[5]),
-        }
+        unix_ms = int(parts[0])
     except ValueError:
-        # Header row or malformed numeric field.
         return None
+
+    return {
+        "unix_ms":      unix_ms,
+        "frame_path":   parts[1].strip(),
+        "lat":          _f(parts[2]),
+        "lon":          _f(parts[3]),
+        "altitude_m":   _f(parts[4]),
+        "heading_deg":  _f(parts[5]),
+    }
 
 
 def read_timestamps_csv(path: str) -> list[dict]:

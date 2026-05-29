@@ -353,20 +353,17 @@ export default function BenchmarkPanel() {
   const [toast, setToast]     = useState('');
   const exportRef = useRef(null);
 
-  useEffect(() => {
-    fetch(`${API}/pipeline/mock_results`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d?.frame_count) setResults(d); })
-      .catch(() => {});
-  }, []);
+  // No auto-load — results are populated when the pipeline runs on a real session.
 
   async function handleLoad() {
     setLoading(true);
     try {
-      const r = await fetch(`${API}/pipeline/mock_results`);
+      // Try to load results for the currently-loaded session name (if any)
+      const sessionName = results?.session_name || 'latest';
+      const r = await fetch(`${API}/pipeline/results/${encodeURIComponent(sessionName)}`);
       const d = r.ok ? await r.json() : null;
       if (d?.frame_count) setResults(d);
-      else setToast('No results available');
+      else setToast('No pipeline results available — run the pipeline first');
     } catch { setToast('Cannot reach backend'); }
     finally { setLoading(false); }
   }
