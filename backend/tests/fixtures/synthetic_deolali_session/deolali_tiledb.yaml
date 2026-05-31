@@ -1,0 +1,7 @@
+source_name: synthetic-deolali-test
+gsd_m_per_px: 0.28
+embedder:
+  gsd_normalisation:
+    enabled: true
+    target_gsd_m: 0.28
+    source: session_altitude
