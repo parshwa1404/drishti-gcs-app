@@ -188,4 +188,7 @@ def test_parse_good_line():
         "lon": 73.8270,
         "altitude_m": 80.5,
         "heading_deg": 210.5,
+        "hdop": None,
+        "satellite_count": None,
+        "disk_free_gb": None,
     }

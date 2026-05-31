@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import session, pipeline, logger, telemetry, preflight
+from routers import session, pipeline, logger, telemetry, preflight, replay
 
 app = FastAPI(title="DRISHTI GCS API", version="0.1.0")
 
@@ -17,6 +17,7 @@ app.include_router(session.router,   prefix="/session",   tags=["session"])
 app.include_router(pipeline.router,  prefix="/pipeline",  tags=["pipeline"])
 app.include_router(telemetry.router, prefix="/telemetry", tags=["telemetry"])
 app.include_router(preflight.router, prefix="/preflight", tags=["preflight"])
+app.include_router(replay.router,   prefix="/replay",    tags=["replay"])
 
 
 @app.get("/health")
