@@ -35,13 +35,13 @@ MANDATORY_CHECKS = [
     "gps_fix",
     "altitude_sane",
     "heading_present",
+    "gps_hdop",
+    "satellite_count",
+    "disk_free",
 ]
 
 # Data not yet flowing — rendered as a grey "unavailable" badge.
 STUBBED_CHECKS = [
-    "gps_hdop",
-    "satellite_count",
-    "disk_free",
     "camera_exposure",
     "fc_link",
     "tile_db_loaded",
@@ -56,6 +56,12 @@ _DEFAULTS = {
     "frame_max_age_pass_s": 5.0,
     "frame_max_age_warn_s": 15.0,
     "heading_stuck_count": 10,
+    "hdop_pass_max": 2.0,
+    "hdop_warn_max": 5.0,
+    "satellite_pass_min": 8,
+    "satellite_warn_min": 5,
+    "disk_free_pass_min_gb": 5.0,
+    "disk_free_warn_min_gb": 2.0,
 }
 
 
@@ -91,6 +97,9 @@ class PreflightEvaluator:
         self._last_heading = None
         self._heading_run = 0
         self._prev_heading = None
+        self._last_hdop = None
+        self._last_satellite_count = None
+        self._last_disk_free_gb = None
 
     # ─── ingest ──────────────────────────────────────────────────────────────
 
@@ -103,6 +112,9 @@ class PreflightEvaluator:
             self._last_lon = rec["lon"]
             self._last_alt = rec["altitude_m"]
             self._last_heading = rec["heading_deg"]
+            self._last_hdop = rec.get("hdop")
+            self._last_satellite_count = rec.get("satellite_count")
+            self._last_disk_free_gb = rec.get("disk_free_gb")
 
             h = rec["heading_deg"]
             if self._prev_heading is not None and h is not None and h == self._prev_heading:
@@ -127,6 +139,9 @@ class PreflightEvaluator:
             lat, lon = self._last_lat, self._last_lon
             alt, heading = self._last_alt, self._last_heading
             heading_run = self._heading_run
+            hdop = self._last_hdop
+            satellite_count = self._last_satellite_count
+            disk_free_gb = self._last_disk_free_gb
 
         checks = [
             self._chk_rpi_connection(connection_status),
@@ -135,6 +150,9 @@ class PreflightEvaluator:
             self._chk_gps_fix(lat, lon),
             self._chk_altitude(alt),
             self._chk_heading(heading, heading_run),
+            self._chk_gps_hdop(hdop),
+            self._chk_satellite_count(satellite_count),
+            self._chk_disk_free(disk_free_gb),
         ]
         checks += [self._stub(cid) for cid in STUBBED_CHECKS]
 
@@ -223,3 +241,30 @@ class PreflightEvaluator:
             return self._report("heading_present", WARN, heading,
                                 f"Heading stuck at {heading}° for {heading_run} frames")
         return self._report("heading_present", PASS, heading, f"{heading}°")
+
+    def _chk_gps_hdop(self, hdop) -> dict:
+        if hdop is None:
+            return self._report("gps_hdop", UNAVAILABLE, None, "hdop column absent from log")
+        if _is_nan(hdop) or hdop >= self.cfg["hdop_warn_max"]:
+            return self._report("gps_hdop", FAIL, hdop, f"HDOP {hdop:.2f} ≥ {self.cfg['hdop_warn_max']}")
+        if hdop >= self.cfg["hdop_pass_max"]:
+            return self._report("gps_hdop", WARN, hdop, f"HDOP {hdop:.2f} (degraded)")
+        return self._report("gps_hdop", PASS, hdop, f"HDOP {hdop:.2f}")
+
+    def _chk_satellite_count(self, sats) -> dict:
+        if sats is None:
+            return self._report("satellite_count", UNAVAILABLE, None, "satellite_count column absent from log")
+        if (_is_nan(sats) if isinstance(sats, float) else False) or sats < self.cfg["satellite_warn_min"]:
+            return self._report("satellite_count", FAIL, sats, f"{sats} satellites < {self.cfg['satellite_warn_min']}")
+        if sats < self.cfg["satellite_pass_min"]:
+            return self._report("satellite_count", WARN, sats, f"{sats} satellites (degraded)")
+        return self._report("satellite_count", PASS, sats, f"{sats} satellites")
+
+    def _chk_disk_free(self, disk_gb) -> dict:
+        if disk_gb is None:
+            return self._report("disk_free", UNAVAILABLE, None, "disk_free_gb column absent from log")
+        if _is_nan(disk_gb) or disk_gb < self.cfg["disk_free_warn_min_gb"]:
+            return self._report("disk_free", FAIL, disk_gb, f"{disk_gb:.1f} GB free < {self.cfg['disk_free_warn_min_gb']} GB")
+        if disk_gb <= self.cfg["disk_free_pass_min_gb"]:
+            return self._report("disk_free", WARN, disk_gb, f"{disk_gb:.1f} GB free (low)")
+        return self._report("disk_free", PASS, disk_gb, f"{disk_gb:.1f} GB free")

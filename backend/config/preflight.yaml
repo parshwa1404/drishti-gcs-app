@@ -12,3 +12,9 @@ preflight:
   frame_max_age_pass_s: 5.0
   frame_max_age_warn_s: 15.0
   heading_stuck_count: 10
+  hdop_pass_max: 2.0
+  hdop_warn_max: 5.0
+  satellite_pass_min: 8
+  satellite_warn_min: 5
+  disk_free_pass_min_gb: 5.0
+  disk_free_warn_min_gb: 2.0
