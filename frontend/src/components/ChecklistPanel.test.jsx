@@ -80,4 +80,34 @@ describe('ChecklistPanel (Panel 6)', () => {
     expect(tile).toHaveAttribute('title', 'Awaiting RPi logger field: gps_hdop');
     expect(screen.getAllByText('data unavailable').length).toBeGreaterThan(0);
   });
+
+  it('renders gps_hdop, satellite_count, disk_free as coloured tiles when SSE provides real states', () => {
+    render(<ChecklistPanel />);
+    const liveChecks = [
+      { check_id: 'rpi_connection',  state: 'pass', value: 'connected',  message: 'SSH connected' },
+      { check_id: 'logger_active',   state: 'pass', value: 0.2,          message: 'Last frame 0.2s ago' },
+      { check_id: 'frame_rate',      state: 'pass', value: 5.1,          message: '5.1 Hz over 10s' },
+      { check_id: 'gps_fix',         state: 'pass', value: '19.91, 73.82', message: 'GPS fix valid' },
+      { check_id: 'altitude_sane',   state: 'pass', value: 80.0,         message: '80.0 m' },
+      { check_id: 'heading_present', state: 'pass', value: 120.0,        message: '120.0°' },
+      { check_id: 'gps_hdop',        state: 'pass', value: 1.2,          message: 'HDOP 1.20' },
+      { check_id: 'satellite_count', state: 'pass', value: 10,           message: '10 satellites' },
+      { check_id: 'disk_free',       state: 'pass', value: 20.0,         message: '20.0 GB free' },
+      { check_id: 'camera_exposure', state: 'unavailable', value: null,  message: 'Awaiting RPi logger field: camera_exposure' },
+    ];
+    emit({ overall: 'GO', checks: liveChecks, timestamp_ms: 1717490001000 });
+
+    // The three tiles must NOT show "data unavailable"
+    const hdopTile   = screen.getByText('GPS HDOP').closest('div[title]');
+    const satsTile   = screen.getByText('Satellites').closest('div[title]');
+    const diskTile   = screen.getByText('Disk Free').closest('div[title]');
+    expect(hdopTile).not.toHaveTextContent('data unavailable');
+    expect(satsTile).not.toHaveTextContent('data unavailable');
+    expect(diskTile).not.toHaveTextContent('data unavailable');
+
+    // Each tile's value should be visible
+    expect(hdopTile).toHaveTextContent('1.2');
+    expect(satsTile).toHaveTextContent('10');
+    expect(diskTile).toHaveTextContent('20');
+  });
 });

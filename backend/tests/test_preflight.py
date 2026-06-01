@@ -208,10 +208,11 @@ def test_unavailable_checks_do_not_block_go():
 
 
 def test_stub_message_names_awaited_field():
+    # gps_hdop is now a real check; verify a remaining stub still uses the old message
     ev = PreflightEvaluator(CFG)
     rep = ev.build_report(connection_status="connected", now_ms=0)
-    hdop = _by_id(rep, "gps_hdop")
-    assert hdop["message"] == "Awaiting RPi logger field: gps_hdop"
+    cam = _by_id(rep, "camera_exposure")
+    assert cam["message"] == "Awaiting RPi logger field: camera_exposure"
 
 
 # ─── configurable thresholds ──────────────────────────────────────────────────
@@ -237,3 +238,119 @@ def test_load_preflight_config_defaults_and_file(tmp_path):
     assert data["altitude_max_m"] == 150.0      # from file
     assert data["altitude_min_m"] == 50.0       # default fills the rest
     assert data["heading_stuck_count"] == 10
+    assert data["hdop_pass_max"] == 2.0         # new defaults present
+
+
+# ─── gps_hdop ────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("hdop,expected", [
+    (1.2, PASS),
+    (3.5, WARN),
+    (7.0, FAIL),
+    (float("nan"), FAIL),
+])
+def test_gps_hdop_states(hdop, expected):
+    ev = PreflightEvaluator(CFG)
+    ev.observe({**_rec(1000), "hdop": hdop, "satellite_count": 8, "disk_free_gb": 10.0})
+    assert _state(ev, "gps_hdop", now_ms=1000) == expected
+
+
+def test_gps_hdop_none_is_unavailable():
+    ev = PreflightEvaluator(CFG)
+    ev.observe({**_rec(1000), "hdop": None, "satellite_count": None, "disk_free_gb": None})
+    assert _state(ev, "gps_hdop", now_ms=1000) == UNAVAILABLE
+
+
+def test_gps_hdop_absent_key_is_unavailable():
+    # Record has none of the new keys (old-format log)
+    ev = PreflightEvaluator(CFG)
+    ev.observe(_rec(1000))
+    assert _state(ev, "gps_hdop", now_ms=1000) == UNAVAILABLE
+
+
+# ─── satellite_count ─────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("sats,expected", [
+    (10, PASS),
+    (6,  WARN),
+    (3,  FAIL),
+])
+def test_satellite_count_states(sats, expected):
+    ev = PreflightEvaluator(CFG)
+    ev.observe({**_rec(1000), "hdop": 1.0, "satellite_count": sats, "disk_free_gb": 10.0})
+    assert _state(ev, "satellite_count", now_ms=1000) == expected
+
+
+def test_satellite_count_none_is_unavailable():
+    ev = PreflightEvaluator(CFG)
+    ev.observe({**_rec(1000), "hdop": 1.0, "satellite_count": None, "disk_free_gb": 10.0})
+    assert _state(ev, "satellite_count", now_ms=1000) == UNAVAILABLE
+
+
+# ─── disk_free ───────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("disk_gb,expected", [
+    (50.0, PASS),
+    (3.0,  WARN),
+    (0.5,  FAIL),
+    (float("nan"), FAIL),
+])
+def test_disk_free_states(disk_gb, expected):
+    ev = PreflightEvaluator(CFG)
+    ev.observe({**_rec(1000), "hdop": 1.0, "satellite_count": 8, "disk_free_gb": disk_gb})
+    assert _state(ev, "disk_free", now_ms=1000) == expected
+
+
+def test_disk_free_none_is_unavailable():
+    ev = PreflightEvaluator(CFG)
+    ev.observe({**_rec(1000), "hdop": 1.0, "satellite_count": 8, "disk_free_gb": None})
+    assert _state(ev, "disk_free", now_ms=1000) == UNAVAILABLE
+
+
+# ─── rollup with new checks ───────────────────────────────────────────────────
+
+def _full_rec(unix_ms, hdop=1.0, sats=10, disk_gb=20.0, **kw):
+    return {**_rec(unix_ms, **kw), "hdop": hdop, "satellite_count": sats, "disk_free_gb": disk_gb}
+
+
+def test_rollup_go_with_new_checks_all_pass():
+    ev = PreflightEvaluator(CFG)
+    last = max(_feed_good(ev, n=50, step=200),
+               max(ev._last_unix_ms or 0, 0))
+    # Replace last frame with one that includes the new fields
+    ev.observe(_full_rec(last, hdop=1.0, sats=10, disk_gb=20.0, hdg=130.0))
+    assert ev.build_report(connection_status="connected", now_ms=last)["overall"] == GO
+
+
+def test_rollup_nogo_when_hdop_fails():
+    ev = PreflightEvaluator(CFG)
+    last = _feed_good(ev)
+    ev.observe(_full_rec(last + 200, hdop=7.0, sats=10, disk_gb=20.0, hdg=130.0))
+    assert ev.build_report(connection_status="connected", now_ms=last + 200)["overall"] == NO_GO
+
+
+def test_rollup_nogo_when_satellites_fail():
+    ev = PreflightEvaluator(CFG)
+    last = _feed_good(ev)
+    ev.observe(_full_rec(last + 200, hdop=1.0, sats=3, disk_gb=20.0, hdg=130.0))
+    assert ev.build_report(connection_status="connected", now_ms=last + 200)["overall"] == NO_GO
+
+
+def test_rollup_nogo_when_disk_fails():
+    ev = PreflightEvaluator(CFG)
+    last = _feed_good(ev)
+    ev.observe(_full_rec(last + 200, hdop=1.0, sats=10, disk_gb=0.5, hdg=130.0))
+    assert ev.build_report(connection_status="connected", now_ms=last + 200)["overall"] == NO_GO
+
+
+# ─── backward compatibility ───────────────────────────────────────────────────
+
+def test_backward_compat_old_format_log_all_unavailable_go():
+    """Old-format records (no hdop/sats/disk keys) → new checks unavailable, overall GO."""
+    ev = PreflightEvaluator(CFG)
+    last = _feed_good(ev)  # uses _rec() which has no new keys
+    rep = ev.build_report(connection_status="connected", now_ms=last)
+    assert _by_id(rep, "gps_hdop")["state"] == UNAVAILABLE
+    assert _by_id(rep, "satellite_count")["state"] == UNAVAILABLE
+    assert _by_id(rep, "disk_free")["state"] == UNAVAILABLE
+    assert rep["overall"] == GO  # unavailable does not block GO
